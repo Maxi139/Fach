@@ -2,7 +2,9 @@
 
 ![macOS build and tests](https://github.com/Maxi139/Fach/actions/workflows/ci.yml/badge.svg)
 
-![Fach icon](Brand/FachIcon.png)
+<p align="center">
+  <img src="Brand/Fach-Brandkit.png" width="800" alt="Fach Brandkit mit Logo, Farben, Materialdetails und macOS-Gestaltungsentwurf">
+</p>
 
 Native macOS-App zum sorgfältigen Aufräumen vorhandener Ordner. Swift und SwiftUI, macOS 26 oder neuer, Apple Silicon.
 

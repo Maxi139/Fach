@@ -94,11 +94,15 @@ public struct Recommendation: Identifiable, Codable, Sendable {
     public var suggestedName: String?
     public var needsQuestion: Bool
     public var isApproved: Bool
+    /// Set when the saved file snapshot no longer matches the current file.
+    /// The app must keep these recommendations out of bulk confirmation.
+    public var requiresIndividualReview: Bool?
     public var autoEligible: Bool { targetFolder != nil && confidence >= 0.9 && margin >= 0.2 && evidence.sufficient && !needsQuestion && !file.isProtected }
-    public init(file: FileSnapshot, targetFolder: URL? = nil, importance: Importance = .open, confidence: Double = 0, margin: Double = 0, reason: String = "Zuordnung prüfen", evidence: AnalysisEvidence = .init(), suggestedName: String? = nil, needsQuestion: Bool = true, isApproved: Bool = false) {
+    public init(file: FileSnapshot, targetFolder: URL? = nil, importance: Importance = .open, confidence: Double = 0, margin: Double = 0, reason: String = "Zuordnung prüfen", evidence: AnalysisEvidence = .init(), suggestedName: String? = nil, needsQuestion: Bool = true, isApproved: Bool = false, requiresIndividualReview: Bool? = nil) {
         self.file = file; self.targetFolder = targetFolder; self.importance = importance; self.confidence = confidence
         self.margin = margin; self.reason = reason; self.evidence = evidence; self.suggestedName = suggestedName
         self.needsQuestion = needsQuestion; self.isApproved = isApproved
+        self.requiresIndividualReview = requiresIndividualReview
     }
 }
 

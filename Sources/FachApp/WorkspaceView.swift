@@ -10,6 +10,7 @@ struct WorkspaceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var inspectorVisible = true
     @State private var previewURL: URL?
+    @State private var batchReview: BatchReviewSelection?
     @State private var confirmTrash = false
     @State private var confirmRename = false
     @State private var showAddFolder = false
@@ -44,6 +45,9 @@ struct WorkspaceView: View {
         .quickLookPreview($previewURL)
         .sheet(isPresented: $model.showOnboarding) { OnboardingView(model: model) }
         .sheet(isPresented: $model.showCloudConsent) { CloudConsentView(model: model) }
+        .sheet(item: $batchReview) { review in
+            BatchReviewView(model: model, recommendations: review.recommendations)
+        }
         .sheet(isPresented: $model.showStructureReview) { StructureReviewView(model: model) }
         .onChange(of: model.showSettings) { _, value in if value { openSettings(); model.showSettings = false } }
         .alert("In den Papierkorb verschieben?", isPresented: $confirmTrash) {
@@ -100,6 +104,11 @@ struct WorkspaceView: View {
             else if model.paused { Button("Fortsetzen", systemImage: "play.fill") { Task { await model.resumeRun() } } }
             else {
                 Button("Analysieren", systemImage: "sparkle.magnifyingglass") { model.requestAnalysis() }.labelStyle(.titleAndIcon).disabled(model.busy || model.source == nil || model.targetRoot == nil)
+                if model.canReviewBatch {
+                    Button("Vorschläge sortieren …", systemImage: "tray.and.arrow.down") {
+                        batchReview = BatchReviewSelection(recommendations: model.batchCandidates)
+                    }.disabled(model.busy || model.paused).buttonStyle(.borderedProminent)
+                }
                 Button("Sortieren", systemImage: "tray.and.arrow.down") { model.sortEligible() }.labelStyle(.titleAndIcon).buttonStyle(.borderedProminent).disabled(model.busy || model.eligible.isEmpty)
             }
         }
@@ -119,7 +128,7 @@ struct WorkspaceView: View {
                     if !model.busy && !model.pendingQuestions.isEmpty {
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: "questionmark.bubble").foregroundStyle(.secondary)
-                            Text("Datei auswählen, Zielordner prüfen und rechts bestätigen. Danach kannst du die bestätigten Dateien sortieren.")
+                            Text(model.canReviewBatch ? "Vorschläge gemeinsam übernehmen oder einzelne Ziele anpassen. Dateien ohne Ziel bleiben hier." : "Dateien ohne passenden Zielordner bleiben hier. Du kannst sie selbst zuordnen.")
                                 .font(.callout).foregroundStyle(.secondary)
                             Spacer()
                         }.padding(.horizontal, 24).padding(.vertical, 12)

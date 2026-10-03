@@ -91,6 +91,32 @@ final class AppModel {
     var pendingManualConfirmationCount: Int {
         recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && $0.targetFolder != nil && !isConfirmed($0.id) }.count
     }
+    var batchCandidates: [Recommendation] {
+        guard !restructuring else { return [] }
+        let existing = availableTargets.filter {
+            guard let values = try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
+            return values.isDirectory == true && values.isSymbolicLink != true
+        }
+        return AssignmentReview.batchCandidates(recommendations: recommendations, existingTargets: existing,
+            completedIDs: completedIDs, protectedIDs: protectedIDs)
+    }
+    var canReviewBatch: Bool { batchCandidates.contains { !isConfirmed($0.id) } }
+    func acceptBatchAndSort(ids: Set<UUID>) {
+        guard !busy, !paused, !ids.isEmpty else { return }
+        let current = Set(batchCandidates.map(\.id))
+        guard ids == current else {
+            error = "Vorschläge haben sich geändert. Bitte Übersicht erneut öffnen."
+            return
+        }
+        for index in recommendations.indices where ids.contains(recommendations[index].id) {
+            recommendations[index].isApproved = true
+            recommendations[index].needsQuestion = false
+            manualSignatures[recommendations[index].id] = inputSignature
+        }
+        refreshManualStatus()
+        persistDraft()
+        sortEligible(onlyIDs: ids)
+    }
     var eligible: [Recommendation] { recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && $0.targetFolder != nil && (($0.autoEligible && (analyzedSignature == inputSignature)) || ($0.isApproved && manualSignatures[$0.id] == inputSignature)) } }
     var visible: [Recommendation] {
         let sourceList = section == .questions ? pendingQuestions : recommendations
@@ -348,6 +374,7 @@ final class AppModel {
     func setTarget(id: UUID, target: URL?, importance: Importance? = nil) {
         guard let index = recommendations.firstIndex(where: { $0.id == id }) else { return }
         recommendations[index].targetFolder = target; recommendations[index].isApproved = target != nil; recommendations[index].needsQuestion = target == nil
+        recommendations[index].requiresIndividualReview = false
         manualSignatures[id] = inputSignature
         if let importance { recommendations[index].importance = importance }
         refreshManualStatus()
@@ -370,11 +397,11 @@ final class AppModel {
         refreshManualStatus()
         persistDraft()
     }
-    func sortEligible(confirmedStructure: Bool = false) {
+    func sortEligible(confirmedStructure: Bool = false, onlyIDs: Set<UUID>? = nil) {
         guard let source, let targetRoot, !busy, !paused else { return }
         if restructuring && !confirmedStructure { showStructureReview = true; return }
         var operations: [PlannedOperation] = []
-        let sorted = eligible
+        let sorted = eligible.filter { onlyIDs?.contains($0.id) ?? true }
         var destinations: Set<String> = []
         for recommendation in sorted {
             guard let folder = recommendation.targetFolder else { continue }

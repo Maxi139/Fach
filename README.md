@@ -18,7 +18,7 @@ Native macOS-App zum sorgfältigen Aufräumen vorhandener Ordner. Swift und Swif
 2. Unterordner nur bei Bedarf einschließen; standardmäßig werden direkte Dateien erfasst.
 3. Kurz beschreiben, was gerade wichtig ist.
 4. Analysieren. Bei Cloudanalyse wird jede Freigabe pro Lauf eingeholt.
-5. Datei auswählen, Zielordner prüfen und mit „Zuordnung bestätigen“ freigeben. „Sortieren“ verschiebt die freigegebenen und sicheren Dateien.
+5. „Vorschläge sortieren …“ öffnet die gemeinsame Übersicht. „Übernehmen und sortieren“ verschiebt die angezeigten Dateien in vorhandene Zielordner. Alternativ einzelne Ziele anpassen und bestätigen. Dateien ohne Ziel und seit der Analyse geänderte Dateien bleiben zur Einzelprüfung offen.
 6. Änderungen im Verlauf einzeln oder als Lauf rückgängig machen.
 
 Analysen und bestätigte Zuordnungen werden lokal gespeichert. Nach einem Neustart kannst du ohne erneute KI-Analyse weiterprüfen. Inzwischen geänderte Dateien brauchen eine neue Bestätigung.
@@ -62,7 +62,7 @@ Swift 6.2+ und macOS-26-SDK erforderlich. Keine externen Swift-Abhängigkeiten; 
 
 ## Prüfnachweise
 
-52 automatisierte Tests für Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
+55 automatisierte Tests für Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
 
 ## Gestaltung
 

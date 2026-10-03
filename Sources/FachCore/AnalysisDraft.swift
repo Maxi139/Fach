@@ -128,6 +128,7 @@ public struct AnalysisDraft: Codable, Sendable {
                 recommendation.margin = 0
                 recommendation.isApproved = false
                 recommendation.needsQuestion = true
+                recommendation.requiresIndividualReview = true
                 recommendation.reason = "Datei wurde seit der Analyse geändert. Bitte Zuordnung erneut bestätigen."
             }
             restoredRecommendations.append(recommendation)

@@ -59,6 +59,11 @@ final class AppModel {
     var selectedID: UUID?
     var selectedIDs: Set<UUID> = []
     var selectionAnchor: UUID?
+    /// The focused, keyboard-first review sequence. It is intentionally not
+    /// persisted: a new review should always begin from the user's live view.
+    var stackMode = false
+    private(set) var fileDeck = FileDeck()
+    var stackLastAction: String?
     var section: WorkspaceSection = .organize { didSet { pruneSelection() } }
     var importanceFilter: Importance? { didSet { pruneSelection() } }
     var fileGroupFilter: FileGroupFilter = .all { didSet { pruneSelection() } }
@@ -116,6 +121,15 @@ final class AppModel {
     }
     var structureCheckAvailable: Bool { !folders.isEmpty && !recommendations.isEmpty && recommendations.filter { $0.targetFolder == nil }.count * 2 >= recommendations.count && recommendations.filter { $0.evidence.sufficient }.count >= 2 }
     var selected: Recommendation? { recommendations.first { $0.id == selectedID } }
+    var stackCurrent: Recommendation? {
+        guard let id = fileDeck.currentID,
+              let recommendation = recommendations.first(where: { $0.id == id }),
+              !completedIDs.contains(id), !protectedIDs.contains(id),
+              !recommendation.file.isProtected, !recommendation.file.isDirectory
+        else { return nil }
+        return recommendation
+    }
+    var stackRemainingCount: Int { fileDeck.remainingCount }
     var pendingQuestions: [Recommendation] {
         let ready = Set(eligible.map(\.id))
         return recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && !ready.contains($0.id) }
@@ -234,6 +248,93 @@ final class AppModel {
     func clearSelection() {
         selectedIDs = []
         selectionAnchor = nil
+    }
+
+    /// Starts from the currently visible files, rather than the current
+    /// selection, so a user can quickly review a whole filtered collection.
+    func startStackMode() {
+        guard !busy, !paused else { return }
+        let candidates = visibleSelectable.filter { !markedTrashIDs.contains($0.id) }
+        fileDeck = FileDeck(ids: candidates.map(\.id), preferredID: selectedID)
+        stackMode = fileDeck.currentID != nil
+        stackLastAction = nil
+        if stackMode {
+            focusStackCurrent()
+        } else {
+            status = "Keine offenen Dateien für den Schnellmodus"
+        }
+    }
+
+    func endStackMode() {
+        stackMode = false
+        fileDeck = FileDeck()
+        stackLastAction = nil
+        selectedID = nil
+        clearSelection()
+    }
+
+    func stackNavigate(direction: Int) {
+        guard stackMode, !busy, !paused else { return }
+        refreshStackDeck()
+        _ = fileDeck.navigate(direction: direction)
+        focusStackCurrent()
+    }
+
+    /// Assigns only the currently previewed file. The existing draft path
+    /// records the manual decision; it does not move a file.
+    @discardableResult
+    func assignStackCurrent(target: URL) -> Bool {
+        guard stackMode, !busy, !paused, let root = targetRoot,
+              let current = stackCurrent else { return false }
+        let normalized = target.standardizedFileURL
+        let rootPath = root.standardizedFileURL.path
+        let knownTargetPaths = Set(availableTargets.map { $0.standardizedFileURL.path })
+        guard (normalized.path == rootPath || normalized.path.hasPrefix(rootPath + "/")),
+              knownTargetPaths.contains(normalized.path) else {
+            error = "Dieser Zielordner ist nicht verfügbar."
+            return false
+        }
+        setTarget(id: current.id, target: normalized, importance: current.importance)
+        stackLastAction = "Zugeordnet zu \(folderLabel(normalized))"
+        _ = fileDeck.handleCurrent()
+        focusStackCurrent()
+        return true
+    }
+
+    /// Delete only records a reversible mark. It never sends the file to the
+    /// Trash from the keyboard review mode.
+    @discardableResult
+    func markStackCurrentForTrash() -> Bool {
+        guard stackMode, !busy, !paused, let current = stackCurrent else { return false }
+        markedTrashIDs.insert(current.id)
+        stackLastAction = "Für den Papierkorb vorgemerkt"
+        refreshManualStatus()
+        persistDraft()
+        _ = fileDeck.handleCurrent()
+        focusStackCurrent()
+        return true
+    }
+
+    /// Remove only files that the core model says can no longer be handled.
+    /// This is deliberately never called by filtering or searching.
+    func refreshStackDeck() {
+        guard stackMode else { return }
+        let available = Set(recommendations.filter {
+            !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) &&
+            !$0.file.isProtected && !$0.file.isDirectory
+        }.map(\.id))
+        _ = fileDeck.reconcile(availableIDs: available)
+    }
+
+    private func focusStackCurrent() {
+        guard stackMode, let id = fileDeck.currentID else {
+            selectedID = nil
+            clearSelection()
+            return
+        }
+        selectedID = id
+        selectedIDs = [id]
+        selectionAnchor = id
     }
     func assignSelection(target: URL) {
         guard !busy, !paused, let root = targetRoot else { return }
@@ -394,6 +495,7 @@ final class AppModel {
         }
     }
     func invalidateAnalysis() {
+        endStackMode()
         files.removeAll { completedIDs.contains($0.id) }
         allowCloud = false; aiService = nil; serviceSignature = nil; analyzedSignature = nil; manualSignatures = [:]; runModeOverride = nil
         acceptedFolders = []; folderProposals = []; structureProposals = []; restructuring = false; completedIDs = []; markedTrashIDs = []; lastEvent = nil; spentUSD = 0; reservedUSD = 0; carriedSpend = 0; carriedReserve = 0
@@ -435,6 +537,8 @@ final class AppModel {
             markedTrashIDs = restored.markedTrashIDs.intersection(validIDs)
             manualSignatures = restored.manualSignatures.filter { validIDs.contains($0.key) }
             pruneSelection()
+            refreshStackDeck()
+            focusStackCurrent()
             duplicateGroups = []; duplicateChecked = false
             persistDraft()
         } catch { self.error = "Dateien konnten nicht aktualisiert werden: \(error.localizedDescription)" }
@@ -584,6 +688,8 @@ final class AppModel {
         selectedIDs.remove(id)
         refreshManualStatus()
         persistDraft()
+        refreshStackDeck()
+        focusStackCurrent()
     }
     func sortEligible(confirmedStructure: Bool = false, onlyIDs: Set<UUID>? = nil) {
         guard let source, let targetRoot, !busy, !paused else { return }
@@ -637,7 +743,12 @@ final class AppModel {
         }
         if event.state == .completed, let snapshot = event.operation.snapshot { duplicateGroups = duplicateGroups.map { $0.filter { $0.id != snapshot.id } }.filter { $0.count > 1 } }
         if event.state == .failed || event.state == .conflict { notices.append(event.message) }
-        if event.state == .completed { status = "\(event.operation.source.lastPathComponent) sortiert"; pruneSelection() }
+        if event.state == .completed {
+            status = "\(event.operation.source.lastPathComponent) sortiert"
+            pruneSelection()
+            refreshStackDeck()
+            focusStackCurrent()
+        }
         persistDraft()
     }
     func renameSelected() async {
@@ -663,6 +774,8 @@ final class AppModel {
         markedTrashIDs.subtract(removedIDs)
         manualSignatures = manualSignatures.filter { !removedIDs.contains($0.key) }
         pruneSelection()
+        refreshStackDeck()
+        focusStackCurrent()
         persistDraft()
     }
     func undo(_ runID: UUID) async {

@@ -20,6 +20,10 @@ struct FachApp: App {
                     .keyboardShortcut("z").disabled(model.busy || model.paused || model.runIDs.isEmpty)
             }
             CommandMenu("Aufräumen") {
+                Button(model.stackMode ? "Stapelmodus verlassen" : "Stapelmodus öffnen") {
+                    if model.stackMode { model.endStackMode() } else { model.startStackMode() }
+                }.keyboardShortcut("j", modifiers: [.command, .shift])
+                    .disabled(model.busy || model.paused || (!model.stackMode && model.visibleSelectable.isEmpty))
                 Button("Analysieren") { model.requestAnalysis() }.keyboardShortcut("r").disabled(model.busy || model.paused || model.source == nil)
                 Button("Sortierübersicht öffnen") { model.showSortReview = true }.disabled(model.busy || model.paused || model.batchCandidates.isEmpty)
                 Button("Bestätigte Dateien sortieren") { model.sortEligible() }.disabled(model.busy || model.paused || model.eligible.isEmpty)

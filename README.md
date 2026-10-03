@@ -21,7 +21,9 @@ Native macOS-App zum sorgfältigen Aufräumen vorhandener Ordner. Swift und Swif
 5. „Dateien sortieren …“ öffnet die gemeinsame Übersicht. Dateien oder ganze Zielgruppen lassen sich abwählen. Der Sortierknopf verschiebt nur die ausgewählten Vorschläge.
 6. Dateien ohne Ziel: mehrere Karten anklicken oder „Alle auswählen“, dann „Ordner wählen …“. Mit Bildern, Videos, Dokumenten und weiteren Filtern lässt sich die Auswahl eingrenzen.
 7. Die Löschtaste merkt die Auswahl für den Papierkorb vor. Ein zweiter Druck hebt die Markierung auf. „In Papierkorb …“ zeigt vor dem Verschieben eine Bestätigung.
-6. Änderungen im Verlauf einzeln oder als Lauf rückgängig machen.
+8. Änderungen im Verlauf einzeln oder als Lauf rückgängig machen.
+
+Für einzelne Dateien: **Stapelmodus** öffnen (⌘⇧J). Die Datei erscheint groß in der Vorschau. ←/→ wechseln die Datei, ⌫ merkt sie zum Löschen vor, **F** öffnet die Ordnersuche. Enter übernimmt den markierten Treffer; ein einzelner Suchtreffer wird nach kurzer Pause automatisch übernommen. Nach einer Zuordnung oder Löschmarkierung erscheint die nächste Datei. Esc führt zur Übersicht zurück. Dort werden Sortieren und Papierkorb bestätigt.
 
 Analysen, bestätigte Zuordnungen und Löschmarkierungen werden lokal gespeichert. Unberührte Zuordnungen bleiben nach Papierkorb und Rückgängig erhalten. Nach einem Neustart kannst du ohne erneute KI-Analyse weiterprüfen. Inzwischen geänderte Dateien brauchen eine neue Bestätigung.
 
@@ -64,7 +66,7 @@ Swift 6.2+ und macOS-26-SDK erforderlich. Keine externen Swift-Abhängigkeiten; 
 
 ## Prüfnachweise
 
-60 automatisierte Tests für Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
+67 automatisierte Tests für Stapelnavigation, Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
 
 ## Gestaltung
 

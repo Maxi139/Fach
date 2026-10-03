@@ -35,7 +35,8 @@ struct WorkspaceView: View {
                     }.padding(14).background(.orange.opacity(0.09))
                 }
                 switch model.section {
-                case .organize, .questions: organizer
+                case .organize, .questions:
+                    if model.stackMode { StackView(model: model) } else { organizer }
                 case .duplicates: duplicates
                 case .history: history
                 }
@@ -76,7 +77,11 @@ struct WorkspaceView: View {
         .onChange(of: model.showSortReview) { _, value in
             if value { batchReview = BatchReviewSelection(recommendations: model.batchCandidates); model.showSortReview = false }
         }
+        .onChange(of: model.stackMode) { _, enabled in
+            if enabled { inspectorVisible = false; fileAreaFocused = false }
+        }
         .onChange(of: model.section) { _, section in
+            if section == .duplicates || section == .history { model.endStackMode() }
             if section == .questions { model.organizationFilter = .withoutTarget }
             else if section == .organize { model.organizationFilter = .all }
         }
@@ -112,13 +117,18 @@ struct WorkspaceView: View {
             if model.analyzing { Button("Anhalten", systemImage: "pause.fill") { model.stopAnalysis() } }
             else if model.sorting { Button("Pause", systemImage: "pause.fill") { Task { await model.pauseRun() } } }
             else if model.paused { Button("Fortsetzen", systemImage: "play.fill") { Task { await model.resumeRun() } } }
-            else {
+            else if !model.stackMode {
                 Button(model.recommendations.isEmpty ? "Analysieren" : "Neu analysieren", systemImage: "sparkle.magnifyingglass") { model.requestAnalysis() }.labelStyle(.titleAndIcon).disabled(model.busy || model.source == nil || model.targetRoot == nil)
 
             }
         }
         ToolbarItem {
-            Button { inspectorVisible.toggle() } label: { Image(systemName: "sidebar.right") }.help("Dateivorschau einblenden").accessibilityLabel("Dateivorschau einblenden")
+            Button(model.stackMode ? "Übersicht" : "Stapelmodus", systemImage: model.stackMode ? "square.grid.2x2" : "rectangle.stack") {
+                if model.stackMode { model.endStackMode() } else { model.startStackMode() }
+            }.help("Stapelmodus · ⌘⇧J").disabled(model.busy || model.paused || (!model.stackMode && model.visibleSelectable.isEmpty))
+        }
+        ToolbarItem {
+            Button { inspectorVisible.toggle() } label: { Image(systemName: "sidebar.right") }.help("Dateivorschau einblenden").accessibilityLabel("Dateivorschau einblenden").disabled(model.stackMode)
         }
     }
 

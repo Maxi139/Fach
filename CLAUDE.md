@@ -19,7 +19,7 @@ swift test
 bash scripts/build-app.sh
 bash scripts/package-dmg.sh
 
-Current regression suite: 19 AI XCTest tests plus 36 Core Swift Testing tests. Snapshots include filesystem ctime to reject same-size rewrites with restored mtime. Current app UI tested in sandbox with synthetic demo corpus and a scoped external fixture; sorting, undo, real Trash and restore verified. Keychain may already contain a user key; never print it. Local Ollama text and LLaVA image smoke tests used only synthetic files and generated artwork. Small local models made inaccurate targets, and their recommendations remain manual-only. Cloud paths tested by injected transport; no private cloud smoke runs.
+Current regression suite: 19 AI XCTest tests plus 41 Core Swift Testing tests. Snapshots include filesystem ctime to reject same-size rewrites with restored mtime. Current app UI tested in sandbox with synthetic demo corpus and a scoped external fixture; sorting, undo, real Trash and restore verified. Keychain may already contain a user key; never print it. Local Ollama text and LLaVA image smoke tests used only synthetic files and generated artwork. Small local models made inaccurate targets, and their recommendations remain manual-only. Cloud paths tested by injected transport; no private cloud smoke runs.
 
 Local distribution default is ad-hoc signed, not notarized. Do not claim Developer ID or notarization unless verified. Update this file when architecture, safety behavior, commands or validation state changes.
 
@@ -31,3 +31,6 @@ Unfinished non-demo analyses and manual choices are checkpointed locally in Appl
 
 ## Bulk review
 “Vorschläge sortieren …” offers one grouped review and explicit consent for all known existing-folder targets, including low-confidence local/recovered suggestions. Batch sorting only moves the reviewed IDs; no inferred targets or new folders. Protected, completed, directory, and restored changed files stay excluded. Recommendation.requiresIndividualReview is optional for legacy draft compatibility; explicit individual assignment clears it. Bulk approvals persist before the existing journaled move/undo path runs.
+
+## Selection and delete marks
+File cards support additive checkbox/click selection, Shift ranges and Command-A scoped to the focused collection; file-kind/status/search filters prune hidden selections and inspector focus. Group/All checkboxes and a searchable folder popover assign multiple files once. Inspector is hidden by default; one counted sort action opens a review with file/group opt-outs. “Ohne Ziel” selects the unassigned filter. Delete toggles persisted markedTrashIDs and never executes Trash directly. Marks exclude moves; assigning/keeping clears them. Trash centrally validates current snapshots/protection and removes only successful requested items, preserving all other analysis. Rename/undo refresh via draft snapshot restoration + fresh metadata merge, preserving untouched choices and costs. Native synthetic multi-selection, Delete/unmark, grouped assignment, selected sorting, Trash and undo were verified.

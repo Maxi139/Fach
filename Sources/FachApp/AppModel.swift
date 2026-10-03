@@ -6,9 +6,36 @@ import FachCore
 import FachAI
 
 enum WorkspaceSection: String, CaseIterable, Identifiable {
-    case organize = "Aufräumen", questions = "Rückfragen", duplicates = "Dubletten", history = "Verlauf"
+    case organize = "Aufräumen", questions = "Ohne Ziel", duplicates = "Dubletten", history = "Verlauf"
     var id: String { rawValue }
     var symbol: String { switch self { case .organize: "tray.2"; case .questions: "questionmark.bubble"; case .duplicates: "doc.on.doc"; case .history: "clock.arrow.circlepath" } }
+}
+
+enum FileGroupFilter: String, CaseIterable, Identifiable {
+    case all = "Alle", images = "Bilder", videos = "Videos", documents = "Dokumente", audio = "Audio", other = "Andere"
+    var id: String { rawValue }
+
+    func includes(_ file: FileSnapshot) -> Bool {
+        guard self != .all else { return true }
+        let ext = file.url.pathExtension.lowercased()
+        let image = ["jpg", "jpeg", "png", "gif", "heic", "webp", "tiff", "bmp", "raw"]
+        let video = ["mov", "mp4", "m4v", "avi", "mkv", "webm"]
+        let audio = ["mp3", "m4a", "aac", "wav", "aiff", "flac", "ogg"]
+        let document = ["pdf", "txt", "rtf", "md", "doc", "docx", "pages", "xls", "xlsx", "numbers", "ppt", "pptx", "key", "csv", "json", "swift", "py", "js", "ts", "zip"]
+        return switch self {
+        case .all: true
+        case .images: image.contains(ext)
+        case .videos: video.contains(ext)
+        case .documents: document.contains(ext)
+        case .audio: audio.contains(ext)
+        case .other: !image.contains(ext) && !video.contains(ext) && !audio.contains(ext) && !document.contains(ext)
+        }
+    }
+}
+
+enum OrganizationFilter: String, CaseIterable, Identifiable {
+    case all = "Alle", withTarget = "Mit Ziel", withoutTarget = "Ohne Ziel", kept = "Bleibt hier", sorted = "Sortiert", trash = "Zum Löschen"
+    var id: String { rawValue }
 }
 
 @MainActor @Observable
@@ -30,9 +57,13 @@ final class AppModel {
     var restructuring = false
     var acceptedFolders: [URL] = []
     var selectedID: UUID?
-    var section: WorkspaceSection = .organize
-    var importanceFilter: Importance?
-    var search = ""
+    var selectedIDs: Set<UUID> = []
+    var selectionAnchor: UUID?
+    var section: WorkspaceSection = .organize { didSet { pruneSelection() } }
+    var importanceFilter: Importance? { didSet { pruneSelection() } }
+    var fileGroupFilter: FileGroupFilter = .all { didSet { pruneSelection() } }
+    var organizationFilter: OrganizationFilter = .all { didSet { pruneSelection() } }
+    var search = "" { didSet { pruneSelection() } }
     var busy = false
     var analyzing = false
     var sorting = false
@@ -43,6 +74,7 @@ final class AppModel {
     var reservedUSD = 0.0
     var notices: [String] = []
     var error: String?
+    var showSortReview = false
     var showSettings = false
     var showOnboarding = !UserDefaults.standard.bool(forKey: "onboardingComplete")
     var showCloudConsent = false
@@ -50,6 +82,7 @@ final class AppModel {
     var allowOriginals = true
     var completedIDs: Set<UUID> = []
     var protectedIDs: Set<UUID> = []
+    var markedTrashIDs: Set<UUID> = []
     var history: [RunEvent] = []
     var undoable: [UUID: Set<UUID>] = [:]
     var duplicateGroups: [[FileSnapshot]] = []
@@ -85,7 +118,7 @@ final class AppModel {
     var selected: Recommendation? { recommendations.first { $0.id == selectedID } }
     var pendingQuestions: [Recommendation] {
         let ready = Set(eligible.map(\.id))
-        return recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !ready.contains($0.id) }
+        return recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && !ready.contains($0.id) }
     }
     var confirmedAssignmentCount: Int { recommendations.filter { isConfirmed($0.id) }.count }
     var pendingManualConfirmationCount: Int {
@@ -97,14 +130,19 @@ final class AppModel {
             guard let values = try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
             return values.isDirectory == true && values.isSymbolicLink != true
         }
-        return AssignmentReview.batchCandidates(recommendations: recommendations, existingTargets: existing,
+        return AssignmentReview.batchCandidates(recommendations: recommendations.filter { !markedTrashIDs.contains($0.id) }, existingTargets: existing,
             completedIDs: completedIDs, protectedIDs: protectedIDs)
+    }
+    var sortReviewCandidates: [Recommendation] {
+        let batchIDs = Set(batchCandidates.map(\.id))
+        let eligibleIDs = Set(eligible.map(\.id))
+        return recommendations.filter { batchIDs.contains($0.id) || eligibleIDs.contains($0.id) }
     }
     var canReviewBatch: Bool { batchCandidates.contains { !isConfirmed($0.id) } }
     func acceptBatchAndSort(ids: Set<UUID>) {
         guard !busy, !paused, !ids.isEmpty else { return }
         let current = Set(batchCandidates.map(\.id))
-        guard ids == current else {
+        guard ids.isSubset(of: current) else {
             error = "Vorschläge haben sich geändert. Bitte Übersicht erneut öffnen."
             return
         }
@@ -117,16 +155,136 @@ final class AppModel {
         persistDraft()
         sortEligible(onlyIDs: ids)
     }
-    var eligible: [Recommendation] { recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && $0.targetFolder != nil && (($0.autoEligible && (analyzedSignature == inputSignature)) || ($0.isApproved && manualSignatures[$0.id] == inputSignature)) } }
+    var eligible: [Recommendation] { recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && $0.targetFolder != nil && (($0.autoEligible && (analyzedSignature == inputSignature)) || ($0.isApproved && manualSignatures[$0.id] == inputSignature)) } }
     var visible: [Recommendation] {
-        let sourceList = section == .questions ? pendingQuestions : recommendations
-        return sourceList.filter { (importanceFilter == nil || $0.importance == importanceFilter) && (search.isEmpty || $0.file.name.localizedCaseInsensitiveContains(search) || ($0.targetFolder?.lastPathComponent.localizedCaseInsensitiveContains(search) ?? false)) }
+        let sourceList = recommendations
+        return sourceList.filter {
+            (importanceFilter == nil || $0.importance == importanceFilter) &&
+            fileGroupFilter.includes($0.file) &&
+            matchesOrganizationFilter($0) &&
+            (search.isEmpty || $0.file.name.localizedCaseInsensitiveContains(search) || ($0.targetFolder?.lastPathComponent.localizedCaseInsensitiveContains(search) ?? false))
+        }.sorted { left, right in
+            let leftGroup = left.targetFolder?.path ?? "\u{ffff}"
+            let rightGroup = right.targetFolder?.path ?? "\u{ffff}"
+            if leftGroup != rightGroup { return leftGroup.localizedStandardCompare(rightGroup) == .orderedAscending }
+            return left.file.name.localizedStandardCompare(right.file.name) == .orderedAscending
+        }
+    }
+    var visibleSelectable: [Recommendation] {
+        visible.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !$0.file.isProtected && !$0.file.isDirectory }
+    }
+    var selectedFiles: [Recommendation] { visible.filter { selectedIDs.contains($0.id) } }
+    var selectedEligible: [Recommendation] {
+        let eligibleIDs = Set(eligible.map(\.id))
+        return selectedFiles.filter { eligibleIDs.contains($0.id) }
+    }
+    var unassignedCount: Int {
+        recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && $0.targetFolder == nil }.count
+    }
+    var markedTrashFiles: [FileSnapshot] {
+        recommendations.filter { markedTrashIDs.contains($0.id) && !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !$0.file.isProtected && !$0.file.isDirectory }.map(\.file)
     }
     var runIDs: [UUID] { Array(Set(history.map(\.runID))).sorted { left, right in (history.first { $0.runID == left }?.date ?? .distantPast) > (history.first { $0.runID == right }?.date ?? .distantPast) } }
     func folderLabel(_ url: URL) -> String {
         guard let root = targetRoot else { return url.lastPathComponent }
         let path = url.standardizedFileURL.path, prefix = root.standardizedFileURL.path + "/"
         return path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : url.lastPathComponent
+    }
+    private func matchesOrganizationFilter(_ recommendation: Recommendation) -> Bool {
+        return switch organizationFilter {
+        case .all: true
+        case .withTarget: recommendation.targetFolder != nil && !markedTrashIDs.contains(recommendation.id) && !completedIDs.contains(recommendation.id)
+        case .withoutTarget: recommendation.targetFolder == nil && !markedTrashIDs.contains(recommendation.id) && !completedIDs.contains(recommendation.id) && !protectedIDs.contains(recommendation.id)
+        case .kept: protectedIDs.contains(recommendation.id) || recommendation.file.isProtected
+        case .sorted: completedIDs.contains(recommendation.id)
+        case .trash: markedTrashIDs.contains(recommendation.id)
+        }
+    }
+    func pruneSelection() {
+        let visibleIDs = Set(visibleSelectable.map(\.id))
+        selectedIDs.formIntersection(visibleIDs)
+        if let selectionAnchor, !visibleIDs.contains(selectionAnchor) { self.selectionAnchor = nil }
+        let allVisibleIDs = Set(visible.map(\.id))
+        if let selectedID, !allVisibleIDs.contains(selectedID) { self.selectedID = selectedIDs.first }
+        if selectedIDs.count == 1 { selectedID = selectedIDs.first }
+    }
+    func selectFile(id: UUID, extendingRange: Bool = false) {
+        let orderedIDs = visibleSelectable.map(\.id)
+        guard orderedIDs.contains(id) else { return }
+        let anchorIsVisible = selectionAnchor.map { orderedIDs.contains($0) } ?? false
+        selectedIDs = FileSelection.toggled(id: id, selected: selectedIDs, orderedIDs: orderedIDs,
+                                            anchor: selectionAnchor, extendingRange: extendingRange)
+        if !extendingRange || !anchorIsVisible { selectionAnchor = id }
+        selectedID = id
+    }
+    func selectAllVisible() {
+        let visible = visibleSelectable
+        selectedIDs = Set(visible.map(\.id))
+        selectionAnchor = visible.first?.id
+        selectedID = visible.first?.id
+    }
+    func selectGroup(ids: Set<UUID>) {
+        let visibleIDs = Set(visibleSelectable.map(\.id))
+        let group = ids.intersection(visibleIDs)
+        guard !group.isEmpty else { return }
+        if group.isSubset(of: selectedIDs) { selectedIDs.subtract(group) }
+        else { selectedIDs.formUnion(group) }
+        selectionAnchor = group.sorted { $0.uuidString < $1.uuidString }.first
+    }
+    func clearSelection() {
+        selectedIDs = []
+        selectionAnchor = nil
+    }
+    func assignSelection(target: URL) {
+        guard !busy, !paused, let root = targetRoot else { return }
+        let normalized = target.standardizedFileURL
+        let rootPath = root.standardizedFileURL.path
+        let knownTargetPaths = Set(availableTargets.map { $0.standardizedFileURL.path })
+        guard (normalized.path == rootPath || normalized.path.hasPrefix(rootPath + "/")), knownTargetPaths.contains(normalized.path) else {
+            error = "Dieser Zielordner ist nicht verfügbar."
+            return
+        }
+        let ids = Set(selectedFiles.map(\.id)).intersection(Set(visibleSelectable.map(\.id)))
+        guard !ids.isEmpty else { return }
+        for index in recommendations.indices where ids.contains(recommendations[index].id) {
+            recommendations[index].targetFolder = normalized
+            recommendations[index].isApproved = true
+            recommendations[index].needsQuestion = false
+            recommendations[index].requiresIndividualReview = false
+            manualSignatures[recommendations[index].id] = inputSignature
+        }
+        markedTrashIDs.subtract(ids)
+        refreshManualStatus()
+        persistDraft()
+    }
+    func keepSelection() {
+        guard !busy, !paused else { return }
+        let ids = Set(selectedFiles.map(\.id)).intersection(Set(visibleSelectable.map(\.id)))
+        guard !ids.isEmpty else { return }
+        protectedIDs.formUnion(ids)
+        markedTrashIDs.subtract(ids)
+        clearSelection()
+        refreshManualStatus()
+        persistDraft()
+    }
+    func sortSelection() {
+        let ids = Set(selectedEligible.map(\.id))
+        guard !ids.isEmpty else { return }
+        sortEligible(onlyIDs: ids)
+    }
+    func markSelectionForTrash() {
+        guard !busy, !paused else { return }
+        let ids = Set(selectedFiles.map(\.id)).intersection(Set(visibleSelectable.map(\.id)))
+        guard !ids.isEmpty else { return }
+        if ids.isSubset(of: markedTrashIDs) { markedTrashIDs.subtract(ids) }
+        else { markedTrashIDs.formUnion(ids) }
+        persistDraft()
+    }
+    func cancelTrashMarks(ids: Set<UUID>) {
+        guard !busy, !paused else { return }
+        markedTrashIDs.subtract(ids)
+        pruneSelection()
+        persistDraft()
     }
 
     init() {
@@ -155,15 +313,15 @@ final class AppModel {
         persistDraft()
     }
 
-    private func makeDraft() -> AnalysisDraft? {
-        guard let source, !isDemo else { return nil }
+    private func makeDraft(includeDemo: Bool = false) -> AnalysisDraft? {
+        guard let source, (!isDemo || includeDemo) else { return nil }
         return AnalysisDraft(source: source, destination: destination, useSeparateDestination: useSeparateDestination,
                              recursive: recursive, context: context,
                              configurationData: try? JSONEncoder().encode(configuration), files: files, folders: folders,
                              recommendations: recommendations, folderProposals: folderProposals,
                              structureProposals: structureProposals, showStructureReview: showStructureReview,
                              restructuring: restructuring, acceptedFolders: acceptedFolders, protectedIDs: protectedIDs,
-                             completedIDs: completedIDs, manualSignatures: manualSignatures,
+                             completedIDs: completedIDs, markedTrashIDs: markedTrashIDs, manualSignatures: manualSignatures,
                              inputSignature: inputSignature, analyzedSignature: analyzedSignature,
                              spentUSD: spentUSD, reservedUSD: reservedUSD)
     }
@@ -207,12 +365,13 @@ final class AppModel {
         files = restored.files; folders = restored.folders; recommendations = restored.recommendations
         folderProposals = restored.folderProposals; structureProposals = restored.structureProposals
         showStructureReview = draft.showStructureReview; restructuring = draft.restructuring
-        acceptedFolders = restored.acceptedFolders; protectedIDs = restored.protectedIDs; completedIDs = restored.completedIDs
+        acceptedFolders = restored.acceptedFolders; protectedIDs = restored.protectedIDs; completedIDs = restored.completedIDs; markedTrashIDs = restored.markedTrashIDs
         manualSignatures = restored.manualSignatures
         spentUSD = draft.spentUSD; reservedUSD = draft.reservedUSD; carriedSpend = spentUSD; carriedReserve = reservedUSD
         allowCloud = false; showCloudConsent = false; aiService = nil; serviceSignature = nil; runModeOverride = nil
         analyzedSignature = restored.staleIDs.isEmpty && draft.analyzedSignature == inputSignature ? draft.analyzedSignature : nil
         selectedID = recommendations.first?.id
+        clearSelection()
         status = "Analyse wiederhergestellt: \(eligible.count) bereit, \(pendingQuestions.count) offen"
         if !restored.staleIDs.isEmpty { notices.append("\(restored.staleIDs.count) geänderte Dateien bitte erneut bestätigen.") }
     }
@@ -237,8 +396,9 @@ final class AppModel {
     func invalidateAnalysis() {
         files.removeAll { completedIDs.contains($0.id) }
         allowCloud = false; aiService = nil; serviceSignature = nil; analyzedSignature = nil; manualSignatures = [:]; runModeOverride = nil
-        acceptedFolders = []; folderProposals = []; structureProposals = []; restructuring = false; completedIDs = []; lastEvent = nil; spentUSD = 0; reservedUSD = 0; carriedSpend = 0; carriedReserve = 0
+        acceptedFolders = []; folderProposals = []; structureProposals = []; restructuring = false; completedIDs = []; markedTrashIDs = []; lastEvent = nil; spentUSD = 0; reservedUSD = 0; carriedSpend = 0; carriedReserve = 0
         recommendations = files.map { Recommendation(file: $0) }; status = "\(files.count) Dateien bereit"
+        clearSelection()
     }
     func loadTargetFolders() async {
         guard let root = targetRoot, !busy else { return }
@@ -252,8 +412,32 @@ final class AppModel {
             let result = try await scanner.scan(root: source, recursive: recursive)
             files = result.files; folders = result.folders; notices = result.warnings; protectedIDs = Set(files.filter(\.isProtected).map(\.id))
             invalidateAnalysis(); duplicateGroups = []; duplicateChecked = false; selectedID = files.first?.id
+            clearSelection()
             persistDraft()
         } catch { self.error = error.localizedDescription; status = "Ordner konnte nicht gelesen werden" }
+    }
+    private func refreshPreservingAssignments() async {
+        guard let source, let draft = makeDraft(includeDemo: true), !busy, !paused else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let fresh = try await scanner.scan(root: source, recursive: recursive)
+            let restored = draft.restore()
+            let knownFiles = Dictionary(uniqueKeysWithValues: restored.files.map { ($0.url.standardizedFileURL.path, $0) })
+            files = fresh.files.map { knownFiles[$0.url.standardizedFileURL.path] ?? $0 }
+            let validIDs = Set(files.map(\.id))
+            recommendations = restored.recommendations.filter { validIDs.contains($0.id) }
+            let assignedIDs = Set(recommendations.map(\.id))
+            recommendations += files.filter { !assignedIDs.contains($0.id) }.map { Recommendation(file: $0) }
+            if targetRoot?.standardizedFileURL == source.standardizedFileURL { folders = fresh.folders }
+            protectedIDs = restored.protectedIDs.intersection(validIDs).union(Set(files.filter(\.isProtected).map(\.id)))
+            completedIDs = restored.completedIDs.intersection(validIDs)
+            markedTrashIDs = restored.markedTrashIDs.intersection(validIDs)
+            manualSignatures = restored.manualSignatures.filter { validIDs.contains($0.key) }
+            pruneSelection()
+            duplicateGroups = []; duplicateChecked = false
+            persistDraft()
+        } catch { self.error = "Dateien konnten nicht aktualisiert werden: \(error.localizedDescription)" }
     }
     func requestAnalysis() {
         guard !busy, !paused, source != nil, targetRoot != nil else { return }
@@ -375,6 +559,7 @@ final class AppModel {
         guard let index = recommendations.firstIndex(where: { $0.id == id }) else { return }
         recommendations[index].targetFolder = target; recommendations[index].isApproved = target != nil; recommendations[index].needsQuestion = target == nil
         recommendations[index].requiresIndividualReview = false
+        markedTrashIDs.remove(id)
         manualSignatures[id] = inputSignature
         if let importance { recommendations[index].importance = importance }
         refreshManualStatus()
@@ -393,7 +578,10 @@ final class AppModel {
         status = "\(eligible.count) bereit, \(pendingQuestions.count) offen"
     }
     func keep(id: UUID) {
+        guard !busy, !paused else { return }
         protectedIDs.insert(id)
+        markedTrashIDs.remove(id)
+        selectedIDs.remove(id)
         refreshManualStatus()
         persistDraft()
     }
@@ -442,10 +630,14 @@ final class AppModel {
     }
     private func receive(_ event: RunEvent) {
         lastEvent = event
-        if event.state == .completed, let snapshot = event.operation.snapshot { completedIDs.insert(snapshot.id) }
+        if event.state == .completed, let snapshot = event.operation.snapshot {
+            completedIDs.insert(snapshot.id)
+            selectedIDs.remove(snapshot.id)
+            if event.operation.kind == .trash { markedTrashIDs.remove(snapshot.id) }
+        }
         if event.state == .completed, let snapshot = event.operation.snapshot { duplicateGroups = duplicateGroups.map { $0.filter { $0.id != snapshot.id } }.filter { $0.count > 1 } }
         if event.state == .failed || event.state == .conflict { notices.append(event.message) }
-        if event.state == .completed { status = "\(event.operation.source.lastPathComponent) sortiert" }
+        if event.state == .completed { status = "\(event.operation.source.lastPathComponent) sortiert"; pruneSelection() }
         persistDraft()
     }
     func renameSelected() async {
@@ -453,27 +645,39 @@ final class AppModel {
         let destination = recommendation.file.url.deletingLastPathComponent().appendingPathComponent(name)
         let operation = PlannedOperation(kind: .rename, source: recommendation.file.url, destination: destination, snapshot: recommendation.file, requiresConfirmation: true, reason: "Dateiname bestätigt")
         await execute(plan: .init(sourceRoot: source, destinationRoot: source, operations: [operation]), sensitive: true)
-        await scan()
+        await refreshPreservingAssignments()
     }
     func trash(_ selectedFiles: [FileSnapshot]) async {
         guard !busy, !paused, let source, let targetRoot else { return }
+        let requestedIDs = Set(selectedFiles.map(\.id))
+        guard !requestedIDs.isEmpty, selectedFiles.allSatisfy({ file in
+            !completedIDs.contains(file.id) && !protectedIDs.contains(file.id) && !file.isProtected && !file.isDirectory &&
+                recommendations.contains { $0.id == file.id && $0.file == file }
+        }) else { error = "Die Auswahl hat sich geändert. Bitte Dateien erneut auswählen."; return }
         let operations = selectedFiles.map { PlannedOperation(kind: .trash, source: $0.url, snapshot: $0, requiresConfirmation: true, reason: "Papierkorb bestätigt") }
         await execute(plan: .init(sourceRoot: source, destinationRoot: targetRoot, operations: operations), sensitive: true)
-        await scan()
+        // Keep every untouched assignment and its evidence. A full scan would invalidate them.
+        let removedIDs = requestedIDs.intersection(completedIDs)
+        files.removeAll { removedIDs.contains($0.id) }
+        recommendations.removeAll { removedIDs.contains($0.id) }
+        markedTrashIDs.subtract(removedIDs)
+        manualSignatures = manualSignatures.filter { !removedIDs.contains($0.key) }
+        pruneSelection()
+        persistDraft()
     }
     func undo(_ runID: UUID) async {
         guard let operationService, !busy, !paused else { return }
         busy = true; error = nil
         do { let events = try await operationService.undo(runID: runID); await refreshHistory(); status = events.contains { $0.state == .conflict } ? "Einige Änderungen bitte im Verlauf prüfen" : "Lauf rückgängig gemacht" }
         catch { self.error = error.localizedDescription }
-        busy = false; await scan()
+        busy = false; lastEvent = nil; await refreshPreservingAssignments()
     }
     func undoAction(runID: UUID, operationID: UUID) async {
         guard let operationService, !busy, !paused else { return }
         busy = true
         do { _ = try await operationService.undo(runID: runID, operationID: operationID); await refreshHistory() }
         catch { self.error = error.localizedDescription }
-        busy = false; await scan()
+        busy = false; lastEvent = nil; await refreshPreservingAssignments()
     }
     func findDuplicates() async {
         guard !busy, !paused else { return }

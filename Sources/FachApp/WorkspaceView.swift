@@ -8,7 +8,10 @@ struct WorkspaceView: View {
     @Bindable var model: AppModel
     @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var inspectorVisible = true
+    @State private var inspectorVisible = false
+    @FocusState private var fileAreaFocused: Bool
+    @State private var showFolderPicker = false
+    @State private var showOptions = false
     @State private var previewURL: URL?
     @State private var batchReview: BatchReviewSelection?
     @State private var confirmTrash = false
@@ -70,7 +73,14 @@ struct WorkspaceView: View {
                 }
             }
         } message: { Text("Fach legt ihn beim Sortieren im Zielordner an.") }
-        .onKeyPress(.space) { if let selected = model.selected { previewURL = currentURL(selected); return .handled }; return .ignored }
+        .onChange(of: model.showSortReview) { _, value in
+            if value { batchReview = BatchReviewSelection(recommendations: model.batchCandidates); model.showSortReview = false }
+        }
+        .onChange(of: model.section) { _, section in
+            if section == .questions { model.organizationFilter = .withoutTarget }
+            else if section == .organize { model.organizationFilter = .all }
+        }
+        .onChange(of: model.visible.map(\.id)) { _, _ in model.pruneSelection() }
     }
 
     private var sidebar: some View {
@@ -82,7 +92,7 @@ struct WorkspaceView: View {
             List(selection: $model.section) {
                 Section("Arbeitsbereich") {
                     ForEach(WorkspaceSection.allCases) { section in
-                        HStack { Label(section.rawValue, systemImage: section.symbol); Spacer(); if section == .questions && !model.pendingQuestions.isEmpty { Text("\(model.pendingQuestions.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) } }.tag(section)
+                        HStack { Label(section.rawValue, systemImage: section.symbol); Spacer(); if section == .questions && model.unassignedCount > 0 { Text("\(model.unassignedCount)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) } }.tag(section)
                     }
                 }
                 Section("Ordner") {
@@ -103,13 +113,8 @@ struct WorkspaceView: View {
             else if model.sorting { Button("Pause", systemImage: "pause.fill") { Task { await model.pauseRun() } } }
             else if model.paused { Button("Fortsetzen", systemImage: "play.fill") { Task { await model.resumeRun() } } }
             else {
-                Button("Analysieren", systemImage: "sparkle.magnifyingglass") { model.requestAnalysis() }.labelStyle(.titleAndIcon).disabled(model.busy || model.source == nil || model.targetRoot == nil)
-                if model.canReviewBatch {
-                    Button("Vorschläge sortieren …", systemImage: "tray.and.arrow.down") {
-                        batchReview = BatchReviewSelection(recommendations: model.batchCandidates)
-                    }.disabled(model.busy || model.paused).buttonStyle(.borderedProminent)
-                }
-                Button("Sortieren", systemImage: "tray.and.arrow.down") { model.sortEligible() }.labelStyle(.titleAndIcon).buttonStyle(.borderedProminent).disabled(model.busy || model.eligible.isEmpty)
+                Button(model.recommendations.isEmpty ? "Analysieren" : "Neu analysieren", systemImage: "sparkle.magnifyingglass") { model.requestAnalysis() }.labelStyle(.titleAndIcon).disabled(model.busy || model.source == nil || model.targetRoot == nil)
+
             }
         }
         ToolbarItem {
@@ -124,36 +129,36 @@ struct WorkspaceView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     header
                     Divider()
-                    if model.section == .organize { runOptions.padding(20); Divider() }
-                    if !model.busy && !model.pendingQuestions.isEmpty {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "questionmark.bubble").foregroundStyle(.secondary)
-                            Text(model.canReviewBatch ? "Vorschläge gemeinsam übernehmen oder einzelne Ziele anpassen. Dateien ohne Ziel bleiben hier." : "Dateien ohne passenden Zielordner bleiben hier. Du kannst sie selbst zuordnen.")
-                                .font(.callout).foregroundStyle(.secondary)
-                            Spacer()
-                        }.padding(.horizontal, 24).padding(.vertical, 12)
+                    if model.section == .organize {
+                        DisclosureGroup("Ordner und Analyseoptionen", isExpanded: $showOptions) { runOptions.padding(.top, 12) }
+                            .padding(.horizontal, 24).padding(.vertical, 10)
                         Divider()
                     }
+                    selectionBar
+                    Divider()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
                             if model.isDemo {
                                 Label("Beispieldateien. Eigene Dateien bleiben unberührt.", systemImage: "play.rectangle").font(.callout).foregroundStyle(.secondary)
                             }
                             if model.visible.isEmpty {
-                                ContentUnavailableView(model.section == .questions ? "Alles geklärt" : "Keine Dateien", systemImage: model.section == .questions ? "checkmark.circle" : "doc", description: Text(model.section == .questions ? "Offene Zuordnungen erscheinen hier." : "Wähle einen anderen Ordner oder beziehe Unterordner ein."))
+                                ContentUnavailableView("Keine passenden Dateien", systemImage: model.section == .questions ? "checkmark.circle" : "doc", description: Text("Passe die Filter an oder leere die Suche."))
                             }
                             ForEach(groupNames, id: \.self) { group in
                                 VStack(alignment: .leading, spacing: 12) {
-                                    HStack(spacing: 8) { Image(systemName: group == "Offen" ? "questionmark.folder" : "folder.fill").foregroundStyle(group == "Offen" ? Color.secondary : Color.accentColor); Text(group == "Offen" ? "Offen" : model.folderLabel(URL(fileURLWithPath: group))).font(.headline); Text("\(groupFiles(group).count)").foregroundStyle(.secondary).font(.callout); Spacer() }
+                                    groupHeader(group)
                                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 14)], spacing: 14) {
                                         ForEach(groupFiles(group)) { item in
-                                            FileTile(item: item, selected: model.selectedID == item.id, completed: model.completedIDs.contains(item.id), protected: model.protectedIDs.contains(item.id)) { model.selectedID = item.id }
+                                            FileTile(item: item, selected: model.selectedIDs.contains(item.id), completed: model.completedIDs.contains(item.id), protected: model.protectedIDs.contains(item.id), markedForTrash: model.markedTrashIDs.contains(item.id), selectionEnabled: !model.busy && !model.paused, action: {
+                                                model.selectFile(id: item.id, extendingRange: NSEvent.modifierFlags.contains(.shift))
+                                                fileAreaFocused = true
+                                            }, preview: { model.selectedID = item.id; previewURL = currentURL(item) })
                                                 .contextMenu {
                                                     Button("Vorschau") { previewURL = currentURL(item) }
                                                     Button("Im Finder zeigen") { NSWorkspace.shared.activateFileViewerSelecting([currentURL(item)]) }
                                                     Button("Hier behalten") { model.keep(id: item.id) }.disabled(model.busy || model.paused)
                                                     Divider()
-                                                    Button("In Papierkorb …", role: .destructive) { trashFiles = [item.file]; confirmTrash = true }.disabled(model.busy || model.completedIDs.contains(item.id) || item.file.isProtected)
+                                                    Button("In Papierkorb …", role: .destructive) { trashFiles = [item.file]; confirmTrash = true }.disabled(model.busy || model.paused || model.completedIDs.contains(item.id) || model.protectedIDs.contains(item.id) || item.file.isProtected)
                                                 }
                                         }
                                     }
@@ -164,6 +169,17 @@ struct WorkspaceView: View {
                             if !model.notices.isEmpty { notices }
                         }.padding(24)
                     }
+                    .focusable().focusEffectDisabled().focused($fileAreaFocused)
+                    .onDeleteCommand { model.markSelectionForTrash() }
+                    .onKeyPress(.space) {
+                        guard let selected = model.selected else { return .ignored }
+                        previewURL = currentURL(selected); return .handled
+                    }
+                    .onKeyPress("a", phases: .down) { press in
+                        guard press.modifiers.contains(.command) else { return .ignored }
+                        model.selectAllVisible(); return .handled
+                    }
+                    .onKeyPress(.escape) { model.clearSelection(); return .handled }
                 }
             }
         }
@@ -180,33 +196,114 @@ struct WorkspaceView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(32)
     }
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text(model.sourceLabel).font(.title.weight(.semibold))
-                    Text(model.status).font(.callout).foregroundStyle(.secondary).accessibilityLabel("Status: \(model.status)")
+                    if model.busy {
+                        Text(model.status).font(.callout).foregroundStyle(.secondary)
+                    } else if !model.recommendations.isEmpty {
+                        Text("\(model.batchCandidates.count) mit Ziel · \(model.unassignedCount) ohne Ziel")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else { Text(model.status).font(.callout).foregroundStyle(.secondary) }
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("\(model.files.count) Dateien").font(.callout.monospacedDigit())
-                    Text(String(format: "%.3f / %.2f USD", model.spentUSD, model.configuration.budgetUSD)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).help("Cloud-Verbrauch dieses Laufs")
-                    if model.reservedUSD > 0 { Text(String(format: "%.3f USD reserviert", model.reservedUSD)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                if !model.busy && !model.paused {
+                    if !model.batchCandidates.isEmpty {
+                        Button("\(fileCountLabel(model.batchCandidates.count)) sortieren …", systemImage: "tray.and.arrow.down") {
+                            batchReview = BatchReviewSelection(recommendations: model.batchCandidates)
+                        }.buttonStyle(.borderedProminent).controlSize(.large)
+                    } else if !model.eligible.isEmpty {
+                        Button("\(fileCountLabel(model.eligible.count)) sortieren", systemImage: "tray.and.arrow.down") { model.sortEligible() }
+                            .buttonStyle(.borderedProminent).controlSize(.large)
+                    } else if model.unassignedCount > 0 && model.organizationFilter != .withoutTarget {
+                        Button("Dateien ohne Ziel ansehen", systemImage: "questionmark.folder") { model.organizationFilter = .withoutTarget }
+                    }
                 }
             }
             if model.analyzing { ProgressView(value: model.progress).accessibilityLabel("Analysefortschritt") }
             if model.sorting || model.lastEvent != nil { movement }
-            HStack {
-                Picker("Anzeigen", selection: $model.importanceFilter) {
-                    Text("Alle").tag(nil as Importance?)
-                    ForEach(Importance.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
-                }.pickerStyle(.segmented).frame(maxWidth: 300)
+            HStack(spacing: 16) {
+                Picker("Dateien", selection: $model.organizationFilter) {
+                    ForEach(OrganizationFilter.allCases, id: \.self) { filter in Text(filter.rawValue).tag(filter) }
+                }.pickerStyle(.segmented)
+                TextField("Dateien suchen", text: $model.search).textFieldStyle(.roundedBorder).frame(width: 190)
+                    .accessibilityLabel("Dateien suchen")
+            }
+            HStack(spacing: 8) {
+                ForEach(FileGroupFilter.allCases, id: \.self) { filter in
+                    Button(filter.rawValue) { model.fileGroupFilter = filter }
+                        .buttonStyle(.bordered).tint(model.fileGroupFilter == filter ? .accentColor : .secondary)
+                        .accessibilityAddTraits(model.fileGroupFilter == filter ? .isSelected : [])
+                }
                 Spacer()
-                TextField("Dateien suchen", text: $model.search).textFieldStyle(.roundedBorder).frame(maxWidth: 230).accessibilityLabel("Dateien suchen")
+                Text("\(fileCountLabel(model.visible.count))").font(.callout.monospacedDigit()).foregroundStyle(.secondary)
             }
         }.padding(24)
     }
+
+    private var selectedSuggestions: [Recommendation] { model.batchCandidates.filter { model.selectedIDs.contains($0.id) } }
+    private var selectionSortCount: Int { selectedSuggestions.isEmpty ? model.selectedEligible.count : selectedSuggestions.count }
+
+    private var selectionBar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Button("Alle auswählen") { model.selectAllVisible(); fileAreaFocused = true }
+                    .disabled(model.visibleSelectable.isEmpty || model.busy || model.paused)
+                if !model.selectedIDs.isEmpty {
+                    Text("\(model.selectedFiles.count) ausgewählt").fontWeight(.medium)
+                    Button("Auswahl aufheben") { model.clearSelection() }.buttonStyle(.plain).foregroundStyle(.secondary)
+                } else {
+                    Text("Dateien anklicken, um mehrere auszuwählen.").foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !model.markedTrashFiles.isEmpty {
+                    Button("\(model.markedTrashFiles.count) in Papierkorb …", systemImage: "trash", role: .destructive) {
+                        trashFiles = model.markedTrashFiles; confirmTrash = true
+                    }.disabled(model.busy || model.paused)
+                }
+            }
+            if !model.selectedFiles.isEmpty {
+                HStack(spacing: 12) {
+                    Button("Ordner wählen …", systemImage: "folder") { showFolderPicker = true }
+                        .popover(isPresented: $showFolderPicker) {
+                            FolderSelectionPopover(model: model) { folder in
+                                model.assignSelection(target: folder); showFolderPicker = false
+                            }
+                        }
+                    Button("Hier lassen", systemImage: "pin") { model.keepSelection() }
+                    Button(model.selectedFiles.allSatisfy { model.markedTrashIDs.contains($0.id) } ? "Löschen aufheben" : "Löschen vormerken", systemImage: "trash") {
+                        model.markSelectionForTrash(); fileAreaFocused = true
+                    }.help("Löschtaste: zum Löschen markieren oder Markierung aufheben")
+                    Spacer()
+                    Button(selectionSortCount == 0 ? "Auswahl sortieren" : "\(fileCountLabel(selectionSortCount)) sortieren …", systemImage: "tray.and.arrow.down") {
+                        if selectedSuggestions.isEmpty { model.sortSelection() }
+                        else { batchReview = BatchReviewSelection(recommendations: selectedSuggestions) }
+                    }.buttonStyle(.borderedProminent).disabled(selectionSortCount == 0)
+                }.disabled(model.busy || model.paused)
+            }
+        }.font(.callout).padding(.horizontal, 24).padding(.vertical, 12)
+    }
+
+    private func groupHeader(_ group: String) -> some View {
+        let items = groupFiles(group)
+        let selectableIDs = Set(items.filter { !model.completedIDs.contains($0.id) && !model.protectedIDs.contains($0.id) && !$0.file.isProtected }.map(\.id))
+        return HStack(spacing: 8) {
+            Toggle(isOn: Binding(get: { !selectableIDs.isEmpty && selectableIDs.isSubset(of: model.selectedIDs) }, set: { _ in
+                model.selectGroup(ids: selectableIDs); fileAreaFocused = true
+            })) {
+                Label(group == "Offen" ? "Noch keinen Zielordner" : model.folderLabel(URL(fileURLWithPath: group)),
+                      systemImage: group == "Offen" ? "questionmark.folder" : "folder.fill")
+                    .font(.headline)
+            }.toggleStyle(.checkbox).disabled(selectableIDs.isEmpty || model.busy || model.paused)
+            Text("\(items.count)").foregroundStyle(.secondary).font(.callout)
+            Spacer()
+        }
+    }
     private var runOptions: some View {
         VStack(alignment: .leading, spacing: 13) {
+            Text(String(format: "Cloud-Verbrauch: %.3f / %.2f USD", model.spentUSD, model.configuration.budgetUSD))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             HStack(spacing: 16) {
                 Picker("Ziel", selection: $model.useSeparateDestination) {
                     Text("In diesem Ordner").tag(false); Text("Anderer Zielordner").tag(true)
@@ -248,7 +345,14 @@ struct WorkspaceView: View {
     }
     private var inspector: some View {
         ScrollView {
-            if let item = model.selected {
+            if model.selectedFiles.count > 1 {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("\(model.selectedFiles.count) Dateien ausgewählt").font(.title2.weight(.semibold))
+                    Text("Wähle gemeinsam einen Ordner oder markiere die Auswahl zum Löschen.").foregroundStyle(.secondary)
+                    Button("Ordner wählen …", systemImage: "folder") { showFolderPicker = true }
+                    Button("Hier lassen", systemImage: "pin") { model.keepSelection() }
+                }.padding(24)
+            } else if let item = model.selected {
                 VStack(alignment: .leading, spacing: 20) {
                     ThumbnailView(url: currentURL(item), size: 200).frame(maxWidth: .infinity).frame(height: 180)
                     VStack(alignment: .leading, spacing: 6) { Text(item.file.name).font(.title3.weight(.semibold)).textSelection(.enabled); Text(ByteCountFormatter.string(fromByteCount: item.file.size, countStyle: .file)).font(.caption).foregroundStyle(.secondary) }
@@ -279,7 +383,7 @@ struct WorkspaceView: View {
                     if let name = item.suggestedName, name != item.file.name, !model.completedIDs.contains(item.id) {
                         VStack(alignment: .leading, spacing: 8) { Text("Dateiname").font(.headline); Text(name).font(.callout).textSelection(.enabled); Button("Umbenennen …") { confirmRename = true }.disabled(model.busy || item.file.isProtected) }
                     }
-                    if !model.completedIDs.contains(item.id), !item.file.isProtected { Divider(); Button("In Papierkorb …", systemImage: "trash", role: .destructive) { trashFiles = [item.file]; confirmTrash = true }.disabled(model.busy || model.paused) }
+                    if !model.completedIDs.contains(item.id), !model.protectedIDs.contains(item.id), !item.file.isProtected { Divider(); Button("In Papierkorb …", systemImage: "trash", role: .destructive) { trashFiles = [item.file]; confirmTrash = true }.disabled(model.busy || model.paused) }
                 }.padding(24)
             } else { ContentUnavailableView("Datei auswählen", systemImage: "doc.text.magnifyingglass", description: Text("Vorschau und Zuordnung erscheinen hier.")).padding(.top, 80) }
         }
@@ -329,19 +433,35 @@ struct FileTile: View {
     let selected: Bool
     let completed: Bool
     let protected: Bool
+    let markedForTrash: Bool
+    let selectionEnabled: Bool
     let action: () -> Void
+    let preview: () -> Void
+    private var tint: Color { markedForTrash ? .red : .accentColor }
+    private var status: String {
+        completed ? "Sortiert" : protected ? "Bleibt hier" : markedForTrash ? "Zum Löschen" : item.targetFolder == nil ? "Ordner wählen" : item.isApproved || item.autoEligible ? "Bereit zum Sortieren" : "Ziel vorgeschlagen"
+    }
     var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 10) {
-                ThumbnailView(url: completed ? item.targetFolder?.appendingPathComponent(item.file.name) ?? item.file.url : item.file.url, size: 96).frame(maxWidth: .infinity).frame(height: 94)
-                Text(item.file.name).font(.callout.weight(.medium)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 5) {
-                    Image(systemName: completed ? "checkmark.circle.fill" : protected ? "pin.fill" : item.autoEligible || item.isApproved ? "checkmark.circle" : "questionmark.circle")
-                    Text(completed ? "Sortiert" : protected ? "Bleibt hier" : item.importance.rawValue)
-                }.font(.caption).foregroundStyle(completed ? .green : .secondary)
-            }.padding(14).background(selected ? Color.accentColor.opacity(0.09) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.07), lineWidth: selected ? 2 : 1))
-        }.buttonStyle(.plain).accessibilityLabel("\(item.file.name), \(completed ? "sortiert" : item.importance.rawValue)").accessibilityAddTraits(selected ? .isSelected : [])
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Toggle("\(item.file.name) auswählen", isOn: Binding(get: { selected }, set: { _ in action() }))
+                    .labelsHidden().toggleStyle(.checkbox).disabled(!selectionEnabled || completed || protected || item.file.isProtected)
+                Spacer()
+                Button(action: preview) { Image(systemName: "eye") }
+                    .buttonStyle(.plain).frame(width: 28, height: 28).accessibilityLabel("\(item.file.name) ansehen")
+            }
+            Button(action: action) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ThumbnailView(url: completed ? item.targetFolder?.appendingPathComponent(item.file.name) ?? item.file.url : item.file.url, size: 96)
+                        .frame(maxWidth: .infinity).frame(height: 88)
+                    Text(item.file.name).font(.callout.weight(.medium)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    Label(status, systemImage: completed ? "checkmark.circle.fill" : protected ? "pin.fill" : markedForTrash ? "trash.fill" : item.targetFolder == nil ? "questionmark.folder" : "folder")
+                        .font(.caption).foregroundStyle(markedForTrash ? .red : .secondary)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("\(item.file.name), \(status)")
+        }.padding(12).background(selected ? tint.opacity(0.09) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(markedForTrash || selected ? tint.opacity(0.7) : Color.primary.opacity(0.07), lineWidth: markedForTrash || selected ? 2 : 1))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -367,3 +487,5 @@ struct BrandMark: View {
         }.frame(width: size, height: size).clipShape(RoundedRectangle(cornerRadius: size * 0.22)).accessibilityHidden(true)
     }
 }
+
+func fileCountLabel(_ count: Int) -> String { "\(count) \(count == 1 ? "Datei" : "Dateien")" }

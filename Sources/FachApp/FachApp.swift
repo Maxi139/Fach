@@ -21,11 +21,20 @@ struct FachApp: App {
             }
             CommandMenu("Aufräumen") {
                 Button("Analysieren") { model.requestAnalysis() }.keyboardShortcut("r").disabled(model.busy || model.paused || model.source == nil)
-                Button("Sichere Dateien sortieren") { model.sortEligible() }.disabled(model.busy || model.paused || model.eligible.isEmpty)
+                Button("Sortierübersicht öffnen") { model.showSortReview = true }.disabled(model.busy || model.paused || model.batchCandidates.isEmpty)
+                Button("Bestätigte Dateien sortieren") { model.sortEligible() }.disabled(model.busy || model.paused || model.eligible.isEmpty)
                 Button(model.paused ? "Fortsetzen" : "Pause") { Task { if model.paused { await model.resumeRun() } else { await model.pauseRun() } } }.disabled(!model.sorting && !model.paused)
                 Button("Analyse anhalten") { model.stopAnalysis() }.disabled(!model.analyzing)
                 Button("Dubletten prüfen") { model.section = .duplicates; Task { await model.findDuplicates() } }.disabled(model.busy || model.paused || model.files.isEmpty)
                 Button("Im Finder zeigen") { if let source = model.source { NSWorkspace.shared.activateFileViewerSelecting([source]) } }
+            }
+            CommandMenu("Auswahl") {
+                Button("Alle sichtbaren Dateien auswählen") { model.selectAllVisible() }.disabled(model.busy || model.paused || model.visibleSelectable.isEmpty)
+                Button("Auswahl aufheben") { model.clearSelection() }.disabled(model.selectedIDs.isEmpty)
+                Divider()
+                Button("Hier lassen") { model.keepSelection() }.disabled(model.busy || model.paused || model.selectedFiles.isEmpty)
+                Button("Zum Löschen markieren / Markierung aufheben") { model.markSelectionForTrash() }.disabled(model.busy || model.paused || model.selectedFiles.isEmpty)
+                Button("Auswahl sortieren") { model.sortSelection() }.disabled(model.busy || model.paused || model.selectedEligible.isEmpty)
             }
             CommandGroup(replacing: .help) {
                 Button("Einrichtung öffnen") { model.showOnboarding = true }

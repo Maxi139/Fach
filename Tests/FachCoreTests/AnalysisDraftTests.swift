@@ -28,7 +28,7 @@ private struct DraftFixture {
                                             reason: "Bitte prüfen")
         let draft = AnalysisDraft(source: fixture.root, recursive: false, context: "Wichtig",
                                   configurationData: Data("configuration".utf8), files: scan.files,
-                                  folders: scan.folders, recommendations: [recommendation], spentUSD: 0.018, reservedUSD: 0.003)
+                                  folders: scan.folders, recommendations: [recommendation], markedTrashIDs: [recommendation.id], spentUSD: 0.018, reservedUSD: 0.003)
         let destination = fixture.base.appendingPathComponent("analysis-draft.json")
         try draft.save(to: destination)
         let loaded = try AnalysisDraft.load(from: destination)
@@ -38,6 +38,7 @@ private struct DraftFixture {
         #expect(loaded.recommendations.count == 1)
         #expect(loaded.spentUSD == 0.018)
         #expect(loaded.reservedUSD == 0.003)
+        #expect(loaded.markedTrashIDs == [recommendation.id])
         #expect(permissions.intValue == 0o600)
     }
 
@@ -52,8 +53,8 @@ private struct DraftFixture {
                                             margin: 0.8, reason: "Automatisch", evidence: .init(summary: "evidence", sufficient: true),
                                             needsQuestion: false, isApproved: true)
         let draft = AnalysisDraft(source: fixture.root, recursive: false, context: "", files: [file], folders: [folder],
-                                  recommendations: [recommendation], manualSignatures: [file.id: "signature"],
-                                  inputSignature: "signature", analyzedSignature: "signature")
+                                  recommendations: [recommendation], markedTrashIDs: [file.id],
+                                  manualSignatures: [file.id: "signature"], inputSignature: "signature", analyzedSignature: "signature")
         try Data("new content".utf8).write(to: url)
         let restored = draft.restore()
         let changed = try #require(restored.recommendations.first)
@@ -62,6 +63,7 @@ private struct DraftFixture {
         #expect(changed.needsQuestion)
         #expect(!changed.isApproved)
         #expect(restored.manualSignatures[file.id] == nil)
+        #expect(!restored.markedTrashIDs.contains(file.id))
     }
 
     @Test func legacyImportRejectsPathEscapes() async throws {
@@ -92,6 +94,16 @@ private struct DraftFixture {
         let url = fixture.base.appendingPathComponent("analysis-draft.json")
         try Data("not json".utf8).write(to: url)
         #expect(throws: (any Error).self) { try AnalysisDraft.load(from: url) }
+    }
+
+    @Test func legacyDraftWithoutTrashMarksStillLoads() throws {
+        let fixture = try DraftFixture(); defer { fixture.cleanup() }
+        let draft = AnalysisDraft(source: fixture.root, recursive: false, context: "", files: [], folders: [], recommendations: [])
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(draft)) as? [String: Any])
+        object.removeValue(forKey: "markedTrashIDs")
+        let url = fixture.base.appendingPathComponent("analysis-draft.json")
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+        #expect(try AnalysisDraft.load(from: url).markedTrashIDs == nil)
     }
 
     @Test func unchangedManualConfirmationSurvivesRestore() async throws {

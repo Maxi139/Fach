@@ -24,6 +24,9 @@ public struct AnalysisDraft: Codable, Sendable {
     public var acceptedFolders: [URL]
     public var protectedIDs: Set<UUID>
     public var completedIDs: Set<UUID>
+    /// Optional for compatibility with drafts written before deletion marking.
+    /// Marks are only a pending user choice; they never trigger an operation.
+    public var markedTrashIDs: Set<UUID>?
     public var manualSignatures: [UUID: String]
     public var inputSignature: String?
     public var analyzedSignature: String?
@@ -36,7 +39,8 @@ public struct AnalysisDraft: Codable, Sendable {
                 folderProposals: [FolderProposal] = [], structureProposals: [FolderProposal] = [],
                 showStructureReview: Bool = false, restructuring: Bool = false,
                 acceptedFolders: [URL] = [], protectedIDs: Set<UUID> = [],
-                completedIDs: Set<UUID> = [], manualSignatures: [UUID: String] = [:],
+                completedIDs: Set<UUID> = [], markedTrashIDs: Set<UUID>? = nil,
+                manualSignatures: [UUID: String] = [:],
                 inputSignature: String? = nil, analyzedSignature: String? = nil,
                 spentUSD: Double = 0, reservedUSD: Double = 0) {
         version = Self.schemaVersion
@@ -56,6 +60,7 @@ public struct AnalysisDraft: Codable, Sendable {
         self.acceptedFolders = acceptedFolders
         self.protectedIDs = protectedIDs
         self.completedIDs = completedIDs
+        self.markedTrashIDs = markedTrashIDs
         self.manualSignatures = manualSignatures
         self.inputSignature = inputSignature
         self.analyzedSignature = analyzedSignature
@@ -87,6 +92,7 @@ public struct AnalysisDraft: Codable, Sendable {
         public var acceptedFolders: [URL]
         public var protectedIDs: Set<UUID>
         public var completedIDs: Set<UUID>
+        public var markedTrashIDs: Set<UUID>
         public var manualSignatures: [UUID: String]
         public var staleIDs: Set<UUID>
     }
@@ -135,6 +141,8 @@ public struct AnalysisDraft: Codable, Sendable {
         }
 
         let restoredIDs = Set(restoredRecommendations.map(\.id))
+        let restoredProtectedIDs = protectedIDs.intersection(validIDs).union(Set(restoredFiles.filter(\.isProtected).map(\.id)))
+        let restoredCompletedIDs = completedIDs.intersection(restoredIDs).subtracting(staleIDs)
         let safeFolders = folders.filter { isWithin($0, root: root) }
         return Restoration(
             files: restoredFiles,
@@ -143,8 +151,12 @@ public struct AnalysisDraft: Codable, Sendable {
             folderProposals: folderProposals,
             structureProposals: structureProposals,
             acceptedFolders: acceptedFolders.filter { isWithin($0, root: root) },
-            protectedIDs: protectedIDs.intersection(validIDs).union(Set(restoredFiles.filter(\.isProtected).map(\.id))),
-            completedIDs: completedIDs.intersection(restoredIDs).subtracting(staleIDs),
+            protectedIDs: restoredProtectedIDs,
+            completedIDs: restoredCompletedIDs,
+            markedTrashIDs: (markedTrashIDs ?? []).intersection(restoredIDs)
+                .subtracting(staleIDs)
+                .subtracting(restoredProtectedIDs)
+                .subtracting(restoredCompletedIDs),
             manualSignatures: manualSignatures.filter { restoredIDs.contains($0.key) && !staleIDs.contains($0.key) },
             staleIDs: staleIDs)
     }

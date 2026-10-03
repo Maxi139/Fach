@@ -116,6 +116,15 @@ struct WorkspaceView: View {
                     header
                     Divider()
                     if model.section == .organize { runOptions.padding(20); Divider() }
+                    if !model.busy && !model.pendingQuestions.isEmpty {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "questionmark.bubble").foregroundStyle(.secondary)
+                            Text("Datei auswählen, Zielordner prüfen und rechts bestätigen. Danach kannst du die bestätigten Dateien sortieren.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Spacer()
+                        }.padding(.horizontal, 24).padding(.vertical, 12)
+                        Divider()
+                    }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
                             if model.isDemo {
@@ -248,6 +257,12 @@ struct WorkspaceView: View {
                             }
                             Button("Ordner ergänzen …", systemImage: "folder.badge.plus") { newFolderName = ""; showAddFolder = true }
                             Picker("Wichtigkeit", selection: Binding(get: { item.importance }, set: { importance in model.setTarget(id: item.id, target: item.targetFolder, importance: importance) })) { ForEach(Importance.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
+                            if model.isConfirmed(item.id) {
+                                Label("Zuordnung bestätigt", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                            } else {
+                                Button("Zuordnung bestätigen", systemImage: "checkmark") { model.confirmTarget(id: item.id) }
+                                    .buttonStyle(.borderedProminent).disabled(item.targetFolder == nil)
+                            }
                             Button("Hier behalten", systemImage: "pin") { model.keep(id: item.id) }
                         }.disabled(model.busy || model.paused)
                     }

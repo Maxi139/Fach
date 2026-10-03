@@ -19,9 +19,12 @@ swift test
 bash scripts/build-app.sh
 bash scripts/package-dmg.sh
 
-Current regression suite: 19 AI XCTest tests plus 26 Core Swift Testing tests. Snapshots include filesystem ctime to reject same-size rewrites with restored mtime. Current app UI tested in sandbox with synthetic demo corpus and a scoped external fixture; sorting, undo, real Trash and restore verified. Keychain may already contain a user key; never print it. Local Ollama text and LLaVA image smoke tests used only synthetic files and generated artwork. Small local models made inaccurate targets, and their recommendations remain manual-only. Cloud paths tested by injected transport; no private cloud smoke runs.
+Current regression suite: 19 AI XCTest tests plus 33 Core Swift Testing tests. Snapshots include filesystem ctime to reject same-size rewrites with restored mtime. Current app UI tested in sandbox with synthetic demo corpus and a scoped external fixture; sorting, undo, real Trash and restore verified. Keychain may already contain a user key; never print it. Local Ollama text and LLaVA image smoke tests used only synthetic files and generated artwork. Small local models made inaccurate targets, and their recommendations remain manual-only. Cloud paths tested by injected transport; no private cloud smoke runs.
 
 Local distribution default is ad-hoc signed, not notarized. Do not claim Developer ID or notarization unless verified. Update this file when architecture, safety behavior, commands or validation state changes.
 
 ## Repository
 GitHub: https://github.com/Maxi139/Fach, public, default branch main. CI runs synthetic tests and builds an ad-hoc-signed preview DMG on macos-26. Never commit API keys, user content, signing identities or local build folders.
+
+## Analysis persistence
+Unfinished non-demo analyses and manual choices are checkpointed locally in Application Support/Fach/analysis-draft.json (0600), incrementally after each file. Restore validates snapshots and resets cloud consent. Changed files need fresh confirmation. Legacy recovered-assignments.json imports through a fresh metadata scan without model calls; it remains local and must never be published. Explicit inspector confirmation approves an existing target without changing the picker. User data and recovery copies stay outside this repository.

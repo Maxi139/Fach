@@ -18,7 +18,9 @@ final class AppModel {
     var destination: URL?
     var useSeparateDestination = false
     var recursive = false
-    var context = ""
+    var context = "" {
+        didSet { if context != oldValue { persistDraft() } }
+    }
     var files: [FileSnapshot] = []
     var folders: [URL] = []
     var recommendations: [Recommendation] = []
@@ -67,6 +69,8 @@ final class AppModel {
     private var runModeOverride: AIConfiguration.Mode?
     private var carriedSpend = 0.0
     private var carriedReserve = 0.0
+    private var draftURL: URL?
+    private var restoringDraft = false
     private var inputSignature: String {
         [source?.path ?? "", targetRoot?.path ?? "", String(recursive), context, configuration.mode.rawValue, configuration.textModel, configuration.visionModel, configuration.cloudTextModel, configuration.cloudVisionModel, String(configuration.budgetUSD)].joined(separator: "\u{1f}")
     }
@@ -82,6 +86,10 @@ final class AppModel {
     var pendingQuestions: [Recommendation] {
         let ready = Set(eligible.map(\.id))
         return recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !ready.contains($0.id) }
+    }
+    var confirmedAssignmentCount: Int { recommendations.filter { isConfirmed($0.id) }.count }
+    var pendingManualConfirmationCount: Int {
+        recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && $0.targetFolder != nil && !isConfirmed($0.id) }.count
     }
     var eligible: [Recommendation] { recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && $0.targetFolder != nil && (($0.autoEligible && (analyzedSignature == inputSignature)) || ($0.isApproved && manualSignatures[$0.id] == inputSignature)) } }
     var visible: [Recommendation] {
@@ -102,6 +110,7 @@ final class AppModel {
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Fach")
             try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
             operationService = try FileOperationService(databaseURL: support.appendingPathComponent("runs.sqlite3"))
+            draftURL = support.appendingPathComponent("analysis-draft.json")
         } catch { self.error = "Verlauf konnte nicht geöffnet werden: \(error.localizedDescription)" }
         Task {
             if let operationService {
@@ -110,12 +119,76 @@ final class AppModel {
             }
         }
         if CommandLine.arguments.contains("--demo") { showOnboarding = false; Task { await createDemo() } }
+        else { Task { await restoreAnalysisDraft() } }
     }
 
     func saveConfiguration() {
         if analyzing { activeTask?.cancel() }
         if let data = try? JSONEncoder().encode(configuration) { UserDefaults.standard.set(data, forKey: "aiConfiguration") }
         serviceSignature = nil
+        persistDraft()
+    }
+
+    private func makeDraft() -> AnalysisDraft? {
+        guard let source, !isDemo else { return nil }
+        return AnalysisDraft(source: source, destination: destination, useSeparateDestination: useSeparateDestination,
+                             recursive: recursive, context: context,
+                             configurationData: try? JSONEncoder().encode(configuration), files: files, folders: folders,
+                             recommendations: recommendations, folderProposals: folderProposals,
+                             structureProposals: structureProposals, showStructureReview: showStructureReview,
+                             restructuring: restructuring, acceptedFolders: acceptedFolders, protectedIDs: protectedIDs,
+                             completedIDs: completedIDs, manualSignatures: manualSignatures,
+                             inputSignature: inputSignature, analyzedSignature: analyzedSignature,
+                             spentUSD: spentUSD, reservedUSD: reservedUSD)
+    }
+
+    private func persistDraft() {
+        guard !restoringDraft, let draftURL, let draft = makeDraft() else { return }
+        do { try draft.save(to: draftURL) }
+        catch { notices.append("Analyse konnte nicht gesichert werden: \(error.localizedDescription)") }
+    }
+
+    private func restoreAnalysisDraft() async {
+        guard let draftURL else { return }
+        do {
+            if FileManager.default.fileExists(atPath: draftURL.path) {
+                try applyRestoredDraft(AnalysisDraft.load(from: draftURL))
+                return
+            }
+            let recoveryURL = draftURL.deletingLastPathComponent().appendingPathComponent("recovered-assignments.json")
+            guard FileManager.default.fileExists(atPath: recoveryURL.path) else { return }
+            let recovered = try RecoveredAssignments.load(from: recoveryURL)
+            let root = URL(fileURLWithPath: recovered.sourceRoot).standardizedFileURL
+            let freshScan = try await scanner.scan(root: root, recursive: false)
+            let imported = try recovered.importedDraft(scan: freshScan, recursive: false)
+            try applyRestoredDraft(imported)
+            persistDraft() // Keep recovered-assignments.json intact as the original backup.
+            notices.append("Vorherige Zuordnungen wurden als offene Bestätigungen wiederhergestellt.")
+        } catch {
+            self.error = "Gesicherte Analyse konnte nicht wiederhergestellt werden: \(error.localizedDescription)"
+        }
+    }
+
+    private func applyRestoredDraft(_ draft: AnalysisDraft) throws {
+        restoringDraft = true
+        defer { restoringDraft = false }
+        let restored = draft.restore()
+        source = draft.source; destination = draft.destination; useSeparateDestination = draft.useSeparateDestination
+        recursive = draft.recursive; context = draft.context; isDemo = false
+        if let data = draft.configurationData, let saved = try? JSONDecoder().decode(AIConfiguration.self, from: data) {
+            configuration = saved
+        }
+        files = restored.files; folders = restored.folders; recommendations = restored.recommendations
+        folderProposals = restored.folderProposals; structureProposals = restored.structureProposals
+        showStructureReview = draft.showStructureReview; restructuring = draft.restructuring
+        acceptedFolders = restored.acceptedFolders; protectedIDs = restored.protectedIDs; completedIDs = restored.completedIDs
+        manualSignatures = restored.manualSignatures
+        spentUSD = draft.spentUSD; reservedUSD = draft.reservedUSD; carriedSpend = spentUSD; carriedReserve = reservedUSD
+        allowCloud = false; showCloudConsent = false; aiService = nil; serviceSignature = nil; runModeOverride = nil
+        analyzedSignature = restored.staleIDs.isEmpty && draft.analyzedSignature == inputSignature ? draft.analyzedSignature : nil
+        selectedID = recommendations.first?.id
+        status = "Analyse wiederhergestellt: \(eligible.count) bereit, \(pendingQuestions.count) offen"
+        if !restored.staleIDs.isEmpty { notices.append("\(restored.staleIDs.count) geänderte Dateien bitte erneut bestätigen.") }
     }
     private func refreshHistory() async {
         guard let operationService else { return }
@@ -143,7 +216,7 @@ final class AppModel {
     }
     func loadTargetFolders() async {
         guard let root = targetRoot, !busy else { return }
-        do { folders = try await scanner.scan(root: root, recursive: recursive).folders }
+        do { folders = try await scanner.scan(root: root, recursive: recursive).folders; persistDraft() }
         catch { self.error = error.localizedDescription }
     }
     func scan() async {
@@ -153,6 +226,7 @@ final class AppModel {
             let result = try await scanner.scan(root: source, recursive: recursive)
             files = result.files; folders = result.folders; notices = result.warnings; protectedIDs = Set(files.filter(\.isProtected).map(\.id))
             invalidateAnalysis(); duplicateGroups = []; duplicateChecked = false; selectedID = files.first?.id
+            persistDraft()
         } catch { self.error = error.localizedDescription; status = "Ordner konnte nicht gelesen werden" }
     }
     func requestAnalysis() {
@@ -219,6 +293,7 @@ final class AppModel {
                 }
                 let usage = await service.usage(); spentUSD = carriedSpend + usage.spentUSD; reservedUSD = carriedReserve + usage.reservedUSD
                 progress = Double(index + 1) / Double(max(candidates.count, 1))
+                persistDraft()
             }
             try Task.checkCancellation()
             let unmatched = recommendations.filter { $0.targetFolder == nil && !protectedIDs.contains($0.id) }
@@ -231,12 +306,14 @@ final class AppModel {
             try Task.checkCancellation()
             analyzedSignature = runInputSignature
             status = "\(eligible.count) bereit, \(pendingQuestions.count) offen"; progress = 1
+            persistDraft()
         } catch is CancellationError { status = "Analyse angehalten" }
         catch { self.error = error.localizedDescription; status = "Analyse angehalten" }
         if let aiService {
             let usage = await aiService.usage()
             spentUSD = carriedSpend + usage.spentUSD; reservedUSD = carriedReserve + usage.reservedUSD
         }
+        persistDraft()
     }
     func checkStructure() async {
         guard let service = aiService, structureCheckAvailable, !busy else { return }
@@ -246,12 +323,14 @@ final class AppModel {
             let usage = await service.usage(); spentUSD = carriedSpend + usage.spentUSD; reservedUSD = carriedReserve + usage.reservedUSD
             if structureProposals.isEmpty { status = "Vorhandene Struktur bleibt bestehen" }
             else { showStructureReview = true; status = "Strukturvorschlag bereit" }
+            persistDraft()
         } catch { self.error = error.localizedDescription }
     }
     func acceptStructure() {
         guard let root = targetRoot else { return }
         acceptedFolders = structureProposals.map { root.appendingPathComponent($0.name, isDirectory: true) }
         restructuring = true; showStructureReview = false
+        persistDraft()
         // Existing directories remain until their contents are explicitly moved.
         startAnalysis()
     }
@@ -264,14 +343,33 @@ final class AppModel {
         if !acceptedFolders.contains(url) { acceptedFolders.append(url) }
         folderProposals.removeAll { $0.id == proposal.id }
         status = "Ordner ergänzt. Zuordnungen erneut prüfen."
+        persistDraft()
     }
     func setTarget(id: UUID, target: URL?, importance: Importance? = nil) {
         guard let index = recommendations.firstIndex(where: { $0.id == id }) else { return }
         recommendations[index].targetFolder = target; recommendations[index].isApproved = target != nil; recommendations[index].needsQuestion = target == nil
         manualSignatures[id] = inputSignature
         if let importance { recommendations[index].importance = importance }
+        refreshManualStatus()
+        persistDraft()
     }
-    func keep(id: UUID) { protectedIDs.insert(id) }
+    func isConfirmed(_ id: UUID) -> Bool {
+        guard let recommendation = recommendations.first(where: { $0.id == id }) else { return false }
+        return recommendation.isApproved && manualSignatures[id] == inputSignature
+    }
+    func confirmTarget(id: UUID) {
+        guard !busy, !paused, let recommendation = recommendations.first(where: { $0.id == id }), recommendation.targetFolder != nil else { return }
+        setTarget(id: id, target: recommendation.targetFolder, importance: recommendation.importance)
+    }
+    private func refreshManualStatus() {
+        guard !analyzing, !sorting else { return }
+        status = "\(eligible.count) bereit, \(pendingQuestions.count) offen"
+    }
+    func keep(id: UUID) {
+        protectedIDs.insert(id)
+        refreshManualStatus()
+        persistDraft()
+    }
     func sortEligible(confirmedStructure: Bool = false) {
         guard let source, let targetRoot, !busy, !paused else { return }
         if restructuring && !confirmedStructure { showStructureReview = true; return }
@@ -321,6 +419,7 @@ final class AppModel {
         if event.state == .completed, let snapshot = event.operation.snapshot { duplicateGroups = duplicateGroups.map { $0.filter { $0.id != snapshot.id } }.filter { $0.count > 1 } }
         if event.state == .failed || event.state == .conflict { notices.append(event.message) }
         if event.state == .completed { status = "\(event.operation.source.lastPathComponent) sortiert" }
+        persistDraft()
     }
     func renameSelected() async {
         guard !busy, !paused, let recommendation = selected, let name = recommendation.suggestedName, let source else { return }

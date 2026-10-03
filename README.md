@@ -18,8 +18,10 @@ Native macOS-App zum sorgfältigen Aufräumen vorhandener Ordner. Swift und Swif
 2. Unterordner nur bei Bedarf einschließen; standardmäßig werden direkte Dateien erfasst.
 3. Kurz beschreiben, was gerade wichtig ist.
 4. Analysieren. Bei Cloudanalyse wird jede Freigabe pro Lauf eingeholt.
-5. Vorschläge prüfen, offene Zuordnungen selbst beantworten, sichere Zuordnungen sortieren.
+5. Datei auswählen, Zielordner prüfen und mit „Zuordnung bestätigen“ freigeben. „Sortieren“ verschiebt die freigegebenen und sicheren Dateien.
 6. Änderungen im Verlauf einzeln oder als Lauf rückgängig machen.
+
+Analysen und bestätigte Zuordnungen werden lokal gespeichert. Nach einem Neustart kannst du ohne erneute KI-Analyse weiterprüfen. Inzwischen geänderte Dateien brauchen eine neue Bestätigung.
 
 Vorhandene Zielordner haben Vorrang. Ergänzende Ordner entstehen erst, wenn sie gebraucht werden. Ein größerer Strukturvorschlag braucht belegte Schwächen und zwei getrennte Nutzerbestätigungen. Bestehende Ordner werden nicht gelöscht oder als Ganzes verschoben.
 
@@ -60,7 +62,7 @@ Swift 6.2+ und macOS-26-SDK erforderlich. Keine externen Swift-Abhängigkeiten; 
 
 ## Prüfnachweise
 
-45 automatisierte Tests für Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
+52 automatisierte Tests für Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
 
 ## Gestaltung
 

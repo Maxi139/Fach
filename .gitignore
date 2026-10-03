@@ -1,0 +1,15 @@
+.build/
+build/
+.DS_Store
+*.xcuserstate
+.swiftpm/
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.mobileprovision
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.log

@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 enum FileSafety {
-    static let protectedExtensions: Set<String> = ["app", "bundle", "framework", "plugin", "photoslibrary", "photolibrary", "musiclibrary", "xcodeproj", "xcworkspace", "playground", "pages", "numbers", "key"]
+    static let protectedExtensions: Set<String> = ["app", "bundle", "framework", "plugin", "photoslibrary", "photolibrary", "musiclibrary", "xcodeproj", "xcworkspace", "playground", "pages", "numbers", "key", "icon"]
     static func protectedDirectory(_ url: URL) -> Bool {
         protectedExtensions.contains(url.pathExtension.lowercased()) ||
         [".git", ".svn", "node_modules"].contains(url.lastPathComponent) ||

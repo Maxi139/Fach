@@ -23,6 +23,10 @@ struct SettingsView: View {
                         }
                         Text(model.configuration.mode == .local ? "Dateiinhalte bleiben auf diesem Mac. Dafür werden lokale Modelle benötigt." : "Ollama übernimmt Bilder, wenn es verfügbar ist. OpenRouter hilft bei Zuordnung und Ordnernamen.").font(.callout).foregroundStyle(.secondary)
                     }
+                    Section("Dateinamen") {
+                        Toggle("Neue Namen vorschlagen", isOn: Binding(get: { model.configuration.suggestNames ?? false }, set: { model.configuration.suggestNames = $0 }))
+                        Text("Benötigt zusätzliche Analysezeit. Mit OpenRouter können weitere Kosten entstehen.").font(.callout).foregroundStyle(.secondary)
+                    }
                     Section("OpenRouter") {
                         SecureField(keyPresent ? "Neuen API-Key einfügen" : "API-Key einfügen", text: $key).textContentType(.password)
                         HStack {
@@ -221,7 +225,7 @@ struct CloudConsentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Label("Cloudanalyse freigeben", systemImage: "network").font(.title2.weight(.semibold))
-            Text("OpenRouter und die ausgewählten Anbieter erhalten Dateinamen, Beschreibungen, Zielordner und dein Vorhaben. Diese Angaben können persönlich sein.").foregroundStyle(.secondary)
+            Text("OpenRouter und die ausgewählten Anbieter erhalten Dateinamen, Beschreibungen, Zielordner mit Beispieldateinamen und dein Vorhaben. Diese Angaben können persönlich sein.").foregroundStyle(.secondary)
             DisclosureGroup("\(model.files.filter { !model.protectedIDs.contains($0.id) }.count) Dateien anzeigen") {
                 ScrollView { VStack(alignment: .leading, spacing: 5) { ForEach(model.files.filter { !model.protectedIDs.contains($0.id) }) { file in Text(file.url.path).font(.caption).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) } } }.frame(maxHeight: 150)
             }

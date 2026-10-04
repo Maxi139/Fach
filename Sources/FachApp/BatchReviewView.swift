@@ -89,6 +89,9 @@ struct BatchReviewView: View {
                     } header: {
                         HStack {
                             Label(model.folderLabel(folder), systemImage: "folder")
+                            if model.acceptedFolders.contains(folder), !FileManager.default.fileExists(atPath: folder.path) {
+                                Text("Wird neu angelegt").font(.caption).foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Toggle("Alle in \(model.folderLabel(folder)) auswählen", isOn: groupSelectionBinding(for: items))
                                 .labelsHidden()
@@ -99,7 +102,7 @@ struct BatchReviewView: View {
                 }
             }.listStyle(.inset)
             if remainingCount > 0 {
-                Text("\(remainingCount) offene Dateien bleiben an ihrem Platz.").font(.callout).foregroundStyle(.secondary)
+                Text(remainingCount == 1 ? "Eine offene Datei bleibt an ihrem Platz." : "\(remainingCount) offene Dateien bleiben an ihrem Platz.").font(.callout).foregroundStyle(.secondary)
             }
             Text("Du kannst den Lauf im Verlauf rückgängig machen.").font(.caption).foregroundStyle(.secondary)
             HStack {

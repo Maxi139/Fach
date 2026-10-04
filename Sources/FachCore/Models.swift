@@ -111,8 +111,10 @@ public struct FolderProposal: Identifiable, Codable, Sendable {
     public var name: String
     public var reason: String
     public var replaces: [URL]
-    public init(id: UUID = UUID(), name: String, reason: String, replaces: [URL] = []) {
-        self.id = id; self.name = name; self.reason = reason; self.replaces = replaces
+    /// Files covered by this small addition, so accepting it needs no second analysis.
+    public var fileIDs: [UUID]?
+    public init(id: UUID = UUID(), name: String, reason: String, replaces: [URL] = [], fileIDs: [UUID]? = nil) {
+        self.id = id; self.name = name; self.reason = reason; self.replaces = replaces; self.fileIDs = fileIDs
     }
 }
 

@@ -131,8 +131,10 @@ final class AppModel {
     }
     var stackRemainingCount: Int { fileDeck.remainingCount }
     var pendingQuestions: [Recommendation] {
-        let ready = Set(eligible.map(\.id))
-        return recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && !ready.contains($0.id) }
+        return recommendations.filter {
+            !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) &&
+            ($0.targetFolder == nil || ($0.requiresIndividualReview ?? false))
+        }
     }
     var confirmedAssignmentCount: Int { recommendations.filter { isConfirmed($0.id) }.count }
     var pendingManualConfirmationCount: Int {
@@ -141,6 +143,7 @@ final class AppModel {
     var batchCandidates: [Recommendation] {
         guard !restructuring else { return [] }
         let existing = availableTargets.filter {
+            if acceptedFolders.contains($0), !FileManager.default.fileExists(atPath: $0.path) { return true }
             guard let values = try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
             return values.isDirectory == true && values.isSymbolicLink != true
         }
@@ -169,7 +172,7 @@ final class AppModel {
         persistDraft()
         sortEligible(onlyIDs: ids)
     }
-    var eligible: [Recommendation] { recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && $0.targetFolder != nil && (($0.autoEligible && (analyzedSignature == inputSignature)) || ($0.isApproved && manualSignatures[$0.id] == inputSignature)) } }
+    var eligible: [Recommendation] { recommendations.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && $0.targetFolder != nil && $0.isApproved && manualSignatures[$0.id] == inputSignature && !($0.requiresIndividualReview ?? false) } }
     var visible: [Recommendation] {
         let sourceList = recommendations
         return sourceList.filter {
@@ -404,7 +407,12 @@ final class AppModel {
             }
         }
         if CommandLine.arguments.contains("--demo") { showOnboarding = false; Task { await createDemo() } }
-        else { Task { await restoreAnalysisDraft() } }
+        else { Task {
+            await restoreAnalysisDraft()
+            if let index = CommandLine.arguments.firstIndex(of: "--sorting-plan"), CommandLine.arguments.indices.contains(index + 1) {
+                await importSortingPlan(URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+            }
+        } }
     }
 
     func saveConfiguration() {
@@ -543,6 +551,116 @@ final class AppModel {
             persistDraft()
         } catch { self.error = "Dateien konnten nicht aktualisiert werden: \(error.localizedDescription)" }
     }
+    /// A curated plan is a local proposal, never permission to move files.
+    private func importSortingPlan(_ url: URL) async {
+        guard !busy, !paused else { return }
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? Int.max
+            guard size <= 2 * 1024 * 1024 else { throw FachError.message("Sortierplan ist zu groß.") }
+            let data = try Data(contentsOf: url)
+            guard data.count <= 2 * 1024 * 1024 else { throw FachError.message("Sortierplan ist zu groß.") }
+            let plan = try JSONDecoder().decode(ReviewedSortingPlan.self, from: data)
+            guard source?.standardizedFileURL == plan.source.standardizedFileURL, !useSeparateDestination else {
+                throw FachError.message("Sortierplan gehört zu einem anderen Ordner.")
+            }
+            let scan = try await scanner.scan(root: plan.source, recursive: recursive)
+            let old = makeDraft()?.restore()
+            let known = Dictionary(uniqueKeysWithValues: (old?.files ?? []).map { ($0.url.standardizedFileURL, $0) })
+            let stableFiles = scan.files.map { known[$0.url.standardizedFileURL] ?? $0 }
+            let resolved = try plan.resolve(scan: ScanResult(files: stableFiles, folders: scan.folders))
+            let validIDs = Set(stableFiles.map(\.id))
+            let retained = Dictionary(uniqueKeysWithValues: (old?.recommendations ?? []).filter { validIDs.contains($0.id) }.map { ($0.id, $0) })
+            let signatures = old?.manualSignatures ?? [:]
+            var proposed = Dictionary(uniqueKeysWithValues: resolved.recommendations.map { ($0.id, $0) })
+            protectedIDs = (old?.protectedIDs ?? []).intersection(validIDs)
+            markedTrashIDs = CommandLine.arguments.contains("--replace-delete-marks") ? [] : (old?.markedTrashIDs ?? []).intersection(validIDs)
+            completedIDs = (old?.completedIDs ?? []).intersection(validIDs)
+            for (id, item) in retained where signatures[id] == inputSignature || protectedIDs.contains(id) || markedTrashIDs.contains(id) || completedIDs.contains(id) {
+                proposed[id] = item
+            }
+            files = stableFiles; folders = scan.folders
+            recommendations = files.map { proposed[$0.id] ?? retained[$0.id] ?? Recommendation(file: $0) }
+            acceptedFolders = Array(Set(acceptedFolders + resolved.newFolders))
+            manualSignatures = signatures.filter { validIDs.contains($0.key) }
+            analyzedSignature = inputSignature
+            allowCloud = false
+            notices = scan.warnings
+            let changedCount = recommendations.filter { $0.requiresIndividualReview ?? false }.count
+            if changedCount > 0 { notices.append("\(changedCount) geänderte Dateien bitte erneut bestätigen.") }
+            endStackMode(); pruneSelection()
+            status = "Sortierplan bereit: \(batchCandidates.count) Dateien mit Ziel"
+            persistDraft()
+        } catch { self.error = "Sortierplan konnte nicht geladen werden: \(error.localizedDescription)" }
+    }
+
+    /// Fast, local suggestions first; no model or cloud request is needed here.
+    func improveAssignments() async {
+        guard !busy, !paused, source != nil else { return }
+        error = nil
+        await refreshPreservingAssignments()
+        guard error == nil, let root = targetRoot else { return }
+        busy = true; analyzing = true; progress = 0
+        defer { busy = false; analyzing = false }
+        let profiles = await folderProfiles(for: availableTargets)
+        let candidates = recommendations.filter {
+            !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) &&
+            manualSignatures[$0.id] != inputSignature && !isConfirmed($0.id) && ($0.targetFolder == nil || ($0.requiresIndividualReview ?? false))
+        }
+        var screenshots: [UUID] = []
+        for (index, item) in candidates.enumerated() {
+            if Task.isCancelled { break }
+            status = "\(item.file.name) wird zugeordnet"
+            do {
+                let evidence = try await ContentExtractor.extract(item.file)
+                if let match = ExistingFolderPlanner.match(file: item.file, evidence: evidence, profiles: profiles),
+                   let position = recommendations.firstIndex(where: { $0.id == item.id }) {
+                    recommendations[position] = match
+                } else if isScreenshot(item.file.name), item.file.url.deletingLastPathComponent().standardizedFileURL != root.appendingPathComponent("Screenshots", isDirectory: true).standardizedFileURL {
+                    screenshots.append(item.id)
+                    if let position = recommendations.firstIndex(where: { $0.id == item.id }) { recommendations[position].evidence = evidence }
+                }
+            } catch { notices.append("\(item.file.name): \(error.localizedDescription)") }
+            progress = Double(index + 1) / Double(max(candidates.count, 1))
+            persistDraft()
+        }
+        let screenshotFolder = availableTargets.first { ["screenshots", "bildschirmfotos", "bildschirmaufnahmen"].contains($0.lastPathComponent.lowercased()) }
+        if let screenshotFolder {
+            for id in screenshots {
+                if let index = recommendations.firstIndex(where: { $0.id == id }) {
+                    recommendations[index].targetFolder = screenshotFolder
+                    recommendations[index].confidence = 0.95; recommendations[index].margin = 0.95
+                    recommendations[index].reason = "Allgemeiner Screenshot ohne sicheren Projektbezug."
+                    recommendations[index].evidence.sufficient = true
+                    recommendations[index].needsQuestion = false; recommendations[index].requiresIndividualReview = false
+                }
+            }
+        } else if screenshots.count >= 3 {
+            folderProposals.removeAll { $0.name == "Screenshots" && $0.fileIDs != nil }
+            folderProposals.append(FolderProposal(name: "Screenshots", reason: "\(screenshots.count) allgemeine Screenshots haben keinen passenden vorhandenen Ordner.", fileIDs: screenshots))
+        }
+        analyzedSignature = inputSignature
+        status = "\(batchCandidates.count) Dateien mit Ziel · \(unassignedCount) noch offen"
+        progress = 1; persistDraft()
+    }
+    private func folderProfiles(for targets: [URL]) async -> [FolderProfile] {
+        let profiles = await FolderKnowledge.inspect(folders: targets)
+        return profiles.map { profile in
+            // Only intentional choices or a supplied reviewed plan teach a folder's purpose.
+            let summaries = recommendations.filter {
+                $0.targetFolder?.standardizedFileURL == profile.url && !($0.requiresIndividualReview ?? false) &&
+                ($0.evidence.origin == "Geprüfter Sortierplan" || (isConfirmed($0.id) && ["Lokale Beschreibung", "Lokale Bildanalyse", "Bildanalyse mit OpenRouter"].contains($0.evidence.origin)))
+            }.map { String($0.evidence.summary.prefix(300)) }.filter { !$0.isEmpty }
+            let purpose = Array(Set(summaries)).sorted().prefix(4).joined(separator: " · ")
+            return FolderProfile(url: profile.url, fileNames: profile.fileNames, purpose: purpose)
+        }
+    }
+    private func isScreenshot(_ name: String) -> Bool {
+        let text = name.lowercased()
+        return ["bildschirmfoto", "screenshot", "xnapper-"].contains { text.hasPrefix($0) } || text.hasPrefix("simulator screenshot")
+    }
+
     func requestAnalysis() {
         guard !busy, !paused, source != nil, targetRoot != nil else { return }
         if configuration.mode == .hybrid {
@@ -563,7 +681,9 @@ final class AppModel {
     }
     private func analyze() async {
         guard let targetRoot else { return }
+        await refreshPreservingAssignments()
         let runInputSignature = inputSignature
+        let cachedEvidence = Dictionary(uniqueKeysWithValues: recommendations.filter { !($0.requiresIndividualReview ?? false) }.map { ($0.id, $0.evidence) })
         busy = true; analyzing = true; error = nil; progress = 0; status = "Analyse wird vorbereitet"
         defer { busy = false; analyzing = false }
         do {
@@ -579,9 +699,6 @@ final class AppModel {
             }
             guard let service = aiService else { return }
             analyzedSignature = nil
-            for index in recommendations.indices where !completedIDs.contains(recommendations[index].id) && manualSignatures[recommendations[index].id] != runInputSignature {
-                recommendations[index] = Recommendation(file: recommendations[index].file)
-            }
             var targets = folders
             if targetRoot.standardizedFileURL != source?.standardizedFileURL {
                 targets = try await scanner.scan(root: targetRoot, recursive: recursive).folders
@@ -592,12 +709,14 @@ final class AppModel {
             }
             targets = Array(Set(targets + acceptedFolders)).sorted { $0.path < $1.path }
             folders = targets
-            let candidates = files.filter { !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && manualSignatures[$0.id] != runInputSignature }
+            let profiles = await folderProfiles(for: targets)
+            let missing = Set(recommendations.filter { $0.targetFolder == nil || ($0.requiresIndividualReview ?? false) }.map(\.id))
+            let candidates = files.filter { missing.contains($0.id) && !completedIDs.contains($0.id) && !protectedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && manualSignatures[$0.id] != runInputSignature }
             for (index, file) in candidates.enumerated() {
                 try Task.checkCancellation()
                 status = "\(file.name) wird geprüft"
                 do {
-                    let result = try await service.analyze(file: file, folders: targets, context: context, allowCloud: allowCloud, allowOriginals: allowOriginals)
+                    let result = try await service.analyze(file: file, folders: targets, context: context, allowCloud: allowCloud, allowOriginals: allowOriginals, folderProfiles: profiles, cachedEvidence: cachedEvidence[file.id].flatMap { $0.summary.isEmpty && $0.extractedText.isEmpty ? nil : $0 }, suggestNames: configuration.suggestNames ?? false)
                     if let position = recommendations.firstIndex(where: { $0.id == file.id }) { recommendations[position] = result }
                 } catch {
                     if error is CancellationError { throw error }
@@ -610,7 +729,7 @@ final class AppModel {
                 persistDraft()
             }
             try Task.checkCancellation()
-            let unmatched = recommendations.filter { $0.targetFolder == nil && !protectedIDs.contains($0.id) }
+            let unmatched = recommendations.filter { $0.targetFolder == nil && !protectedIDs.contains($0.id) && !completedIDs.contains($0.id) && !markedTrashIDs.contains($0.id) && manualSignatures[$0.id] != runInputSignature }
             if !unmatched.isEmpty {
                 status = "Passende Ordner werden gesucht"
                 do { folderProposals = try await service.proposeFolders(files: unmatched, existingFolders: targets, context: context, allowCloud: allowCloud) }
@@ -656,7 +775,17 @@ final class AppModel {
         let url = root.appendingPathComponent(clean, isDirectory: true)
         if !acceptedFolders.contains(url) { acceptedFolders.append(url) }
         folderProposals.removeAll { $0.id == proposal.id }
-        status = "Ordner ergänzt. Zuordnungen erneut prüfen."
+        if let ids = proposal.fileIDs {
+            for index in recommendations.indices where ids.contains(recommendations[index].id) && !protectedIDs.contains(recommendations[index].id) && !markedTrashIDs.contains(recommendations[index].id) && !completedIDs.contains(recommendations[index].id) && !isConfirmed(recommendations[index].id) {
+                recommendations[index].targetFolder = url
+                recommendations[index].confidence = 0.95; recommendations[index].margin = 0.95
+                recommendations[index].evidence.sufficient = true
+                recommendations[index].reason = "Passender gemeinsamer Ordner für diese Screenshots."
+                recommendations[index].needsQuestion = false; recommendations[index].requiresIndividualReview = false
+            }
+            analyzedSignature = inputSignature
+            status = "Zuordnungen bereit. Öffne die Sortierübersicht."
+        } else { status = "Ordner ergänzt. Zuordnungen erneut prüfen." }
         persistDraft()
     }
     func setTarget(id: UUID, target: URL?, importance: Importance? = nil) {
@@ -699,6 +828,10 @@ final class AppModel {
         var destinations: Set<String> = []
         for recommendation in sorted {
             guard let folder = recommendation.targetFolder else { continue }
+            guard FileManager.default.fileExists(atPath: folder.path) || acceptedFolders.contains(folder) else {
+                notices.append("\(recommendation.file.name): Zielordner ist nicht mehr vorhanden. Bitte neu zuordnen.")
+                continue
+            }
             let destination = folder.appendingPathComponent(recommendation.file.name)
             if destination.standardizedFileURL == recommendation.file.url.standardizedFileURL { continue }
             guard !FileManager.default.fileExists(atPath: destination.path), destinations.insert(destination.path.lowercased()).inserted else {

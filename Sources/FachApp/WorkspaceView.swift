@@ -118,7 +118,8 @@ struct WorkspaceView: View {
             else if model.sorting { Button("Pause", systemImage: "pause.fill") { Task { await model.pauseRun() } } }
             else if model.paused { Button("Fortsetzen", systemImage: "play.fill") { Task { await model.resumeRun() } } }
             else if !model.stackMode {
-                Button(model.recommendations.isEmpty ? "Analysieren" : "Neu analysieren", systemImage: "sparkle.magnifyingglass") { model.requestAnalysis() }.labelStyle(.titleAndIcon).disabled(model.busy || model.source == nil || model.targetRoot == nil)
+                Button("Ziele finden", systemImage: "wand.and.stars") { Task { await model.improveAssignments() } }.disabled(model.busy || model.source == nil)
+                Button(model.recommendations.isEmpty ? "Analysieren" : "Fehlende Ziele analysieren", systemImage: "sparkle.magnifyingglass") { model.requestAnalysis() }.labelStyle(.titleAndIcon).disabled(model.busy || model.source == nil || model.targetRoot == nil)
 
             }
         }
@@ -345,7 +346,7 @@ struct WorkspaceView: View {
                     Button("Nutzen") { model.acceptFolder(proposal) }.disabled(model.busy || model.paused)
                 }
             }
-            if !model.acceptedFolders.isEmpty { Button("Zuordnungen erneut prüfen") { model.requestAnalysis() }.disabled(model.busy || model.paused) }
+            if !model.acceptedFolders.isEmpty && model.recommendations.contains(where: { $0.targetFolder == nil }) { Button("Fehlende Ziele analysieren") { model.requestAnalysis() }.disabled(model.busy || model.paused) }
         }
     }
     private var notices: some View {

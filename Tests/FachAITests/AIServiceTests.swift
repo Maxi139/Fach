@@ -69,6 +69,101 @@ final class AIServiceTests: XCTestCase {
         let service = AIService(configuration: .init(), apiKey: nil, transport: transport)
         do { _ = try await service.analyze(file: try fixture(), folders: [], context: "", allowCloud: false, allowOriginals: false); XCTFail("Unknown target accepted") } catch {}
     }
+    func testDeterministicExistingFolderMatchMakesNoTransportCalls() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("Nordlicht-Projekt-Notiz.txt")
+        try Data("Kurze Notiz".utf8).write(to: file)
+        let target = directory.appendingPathComponent("Nordlicht Projekt", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let transport = MockTransport { _ in XCTFail("Deterministic match reached a model"); return [:] }
+
+        let result = try await AIService(configuration: .init(), apiKey: nil, transport: transport).analyze(
+            file: try snapshot(file), folders: [target], context: "", allowCloud: false, allowOriginals: false,
+            folderProfiles: [FolderProfile(url: target, fileNames: [])]
+        )
+
+        XCTAssertEqual(result.targetFolder, target.standardizedFileURL)
+        XCTAssertFalse(result.needsQuestion)
+        let requests = await transport.urls()
+        XCTAssertTrue(requests.isEmpty)
+    }
+    func testCachedLocalImageEvidenceDoesNotRunVisionAgain() async throws {
+        let file = try fixture(extension: "png")
+        let transport = MockTransport { request in
+            if request.url!.path == "/api/show" { return ["capabilities": ["completion"]] }
+            if request.url!.path == "/api/chat" {
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                let messages = body["messages"] as! [[String: Any]]
+                let user = messages[1]
+                XCTAssertNil(user["images"])
+                return ["message": ["content": "{\"target\":\"other\",\"importance\":\"open\",\"reason\":\"Kein Ziel\"}"]]
+            }
+            XCTFail("Unexpected request")
+            return [:]
+        }
+        var config = AIConfiguration(); config.mode = .local
+        let result = try await AIService(configuration: config, apiKey: nil, transport: transport).analyze(
+            file: file, folders: [URL(fileURLWithPath: "/invented/Unpassend")], context: "", allowCloud: false, allowOriginals: false,
+            cachedEvidence: AnalysisEvidence(summary: "Bereits lokal beschriebene Grafik", sufficient: true, origin: "Lokale Bildanalyse", imageData: Data([1, 2, 3]))
+        )
+        XCTAssertNil(result.targetFolder)
+        let requests = await transport.urls()
+        XCTAssertEqual(requests.filter { $0.hasSuffix("/api/chat") }.count, 1)
+    }
+    func testCachedEvidenceIsRejectedWhenFileChanged() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        try Data("Original".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let scanned = try snapshot(url)
+        usleep(20_000)
+        try Data("Ersetzt".utf8).write(to: url)
+        let transport = MockTransport { _ in XCTFail("Changed file reused cached evidence"); return [:] }
+
+        do {
+            _ = try await AIService(configuration: .init(), apiKey: nil, transport: transport).analyze(
+                file: scanned, folders: [], context: "", allowCloud: false, allowOriginals: false,
+                cachedEvidence: AnalysisEvidence(summary: "Alte Beschreibung", sufficient: true)
+            )
+            XCTFail("Changed file accepted cached evidence")
+        } catch {}
+        let requests = await transport.urls()
+        XCTAssertTrue(requests.isEmpty)
+    }
+    func testOpenImportanceWithCertainTargetDoesNotForceQuestion() async throws {
+        let file = try fixture(extension: "txt")
+        let target = URL(fileURLWithPath: "/invented/Unterlagen")
+        let transport = MockTransport { request in
+            if request.url!.path.hasSuffix("/endpoints") { return ["data": ["endpoints": [["pricing": ["prompt": "0.0000001", "completion": "0"]]]]] }
+            if request.url!.path.hasSuffix("/systemone") {
+                return ["answers": ["target": ["choice": "f0", "confidence": 0.99, "probabilities": ["f0": 0.99, "other": 0.01]], "importance": ["choice": "open", "confidence": 0.2, "probabilities": ["open": 0.2, "active": 0.4, "archive": 0.4]], "question": ["noul": 0]], "usage": ["cost": 0.0001]]
+            }
+            XCTFail("Unexpected request")
+            return [:]
+        }
+        let result = try await AIService(configuration: .init(), apiKey: "invented", transport: transport).analyze(file: file, folders: [target], context: "", allowCloud: true, allowOriginals: true)
+        XCTAssertEqual(result.importance, .open)
+        XCTAssertFalse(result.needsQuestion)
+        XCTAssertTrue(result.autoEligible)
+    }
+    func testNamingRunsOnlyWhenExplicitlyRequested() async throws {
+        let file = try fixture(extension: "txt")
+        let transport = MockTransport { request in
+            if request.url!.path == "/api/show" { return ["capabilities": ["completion"]] }
+            let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+            let format = body["format"] as! [String: Any]
+            let properties = format["properties"] as! [String: Any]
+            if properties["name"] != nil { return ["message": ["content": "{\"name\":\"Besserer Name.txt\"}"]] }
+            return ["message": ["content": "{\"target\":\"other\",\"importance\":\"open\",\"reason\":\"Kein Ziel\"}"]]
+        }
+        var config = AIConfiguration(); config.mode = .local
+        let service = AIService(configuration: config, apiKey: nil, transport: transport)
+        let result = try await service.analyze(file: file, folders: [], context: "", allowCloud: false, allowOriginals: false, suggestNames: true)
+        XCTAssertEqual(result.suggestedName, "Besserer Name.txt")
+        let requests = await transport.urls()
+        XCTAssertEqual(requests.filter { $0.hasSuffix("/api/chat") }.count, 2)
+    }
     func testBudgetBlocksBeforePaidRequest() async throws {
         let transport = MockTransport { _ in ["data": ["endpoints": [["pricing": ["prompt": "0.01", "completion": "0.01"]]]]] }
         var config = AIConfiguration(); config.budgetUSD = 0.001
@@ -198,7 +293,7 @@ final class AIServiceTests: XCTestCase {
             return ["choices": [["message": ["content": "{\"name\":\"Rechnung.txt\"}"]]], "usage": ["cost": 0.0002, "prompt_tokens": 80, "completion_tokens": 10]]
         }
         let service = AIService(configuration: .init(), apiKey: "invented", transport: transport)
-        let result = try await service.analyze(file: try snapshot(url), folders: [directory.appendingPathComponent("Rechnungen")], context: "Abgeschlossen", allowCloud: true, allowOriginals: true)
+        let result = try await service.analyze(file: try snapshot(url), folders: [directory.appendingPathComponent("Rechnungen")], context: "Abgeschlossen", allowCloud: true, allowOriginals: true, suggestNames: true)
         XCTAssertEqual(result.importance, .archive); XCTAssertTrue(result.autoEligible)
         let usage = await service.usage(); XCTAssertEqual(usage.spentUSD, 0.0003, accuracy: 0.0000001); XCTAssertEqual(usage.reservedUSD, 0, accuracy: 0.0000001); XCTAssertEqual(usage.inputTokens, 180)
     }

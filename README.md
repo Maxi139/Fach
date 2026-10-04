@@ -17,7 +17,7 @@ Native macOS-App zum sorgfältigen Aufräumen vorhandener Ordner. Swift und Swif
 1. Ordner auswählen, beispielsweise den Schreibtisch.
 2. Unterordner nur bei Bedarf einschließen; standardmäßig werden direkte Dateien erfasst.
 3. Kurz beschreiben, was gerade wichtig ist.
-4. Analysieren. Bei Cloudanalyse wird jede Freigabe pro Lauf eingeholt.
+4. „Ziele finden“ prüft lokal vorhandene Ordner und zusammengehörige Dateien. Für fehlende Ziele kann anschließend die KI analysieren; Cloudfreigaben werden pro Lauf eingeholt.
 5. „Dateien sortieren …“ öffnet die gemeinsame Übersicht. Dateien oder ganze Zielgruppen lassen sich abwählen. Der Sortierknopf verschiebt nur die ausgewählten Vorschläge.
 6. Dateien ohne Ziel: mehrere Karten anklicken oder „Alle auswählen“, dann „Ordner wählen …“. Mit Bildern, Videos, Dokumenten und weiteren Filtern lässt sich die Auswahl eingrenzen.
 7. Die Löschtaste merkt die Auswahl für den Papierkorb vor. Ein zweiter Druck hebt die Markierung auf. „In Papierkorb …“ zeigt vor dem Verschieben eine Bestätigung.
@@ -27,6 +27,8 @@ Für einzelne Dateien: **Stapelmodus** öffnen (⌘⇧J). Die Datei erscheint gr
 
 Analysen, bestätigte Zuordnungen und Löschmarkierungen werden lokal gespeichert. Unberührte Zuordnungen bleiben nach Papierkorb und Rückgängig erhalten. Nach einem Neustart kannst du ohne erneute KI-Analyse weiterprüfen. Inzwischen geänderte Dateien brauchen eine neue Bestätigung.
 
+Fach berücksichtigt vorhandene Dateien in den Zielordnern, erkennt Begleitdateien und Dateiserien und nutzt Projektnamen aus der Texterkennung. Ein Dateiformat allein ist kein Grund, eine Datei in einen beliebigen Projektordner zu stecken. Eindeutige Fälle brauchen keine Modellanfrage; unveränderte Inhalte müssen nicht erneut vollständig analysiert werden. Neue Dateinamen sind in den Einstellungen optional, da sie zusätzliche Zeit und gegebenenfalls Kosten verursachen.
+
 Vorhandene Zielordner haben Vorrang. Ergänzende Ordner entstehen erst, wenn sie gebraucht werden. Ein größerer Strukturvorschlag braucht belegte Schwächen und zwei getrennte Nutzerbestätigungen. Bestehende Ordner werden nicht gelöscht oder als Ganzes verschoben.
 
 ## KI einrichten
@@ -35,7 +37,7 @@ Vorhandene Zielordner haben Vorrang. Ergänzende Ordner entstehen erst, wenn sie
 
 **Hybrid:** Ein OpenRouter-Konto, Guthaben und API-Key werden benötigt. Die Anleitung in der App verlinkt Konto, Guthaben und Key-Verwaltung. Der Key wird im macOS-Schlüsselbund gespeichert. Jev entscheidet strukturiert über vorhandene Zielordner und Wichtigkeit; ein günstiges konfigurierbares Textmodell schlägt Namen vor. Bilder werden bevorzugt lokal beschrieben. Cloud-Bildanalyse ist nur mit Inhaltsfreigabe erlaubt. Standardbudget: 0,10 USD pro Lauf. Preisprüfung, Reservierung vor Anfragen und keine automatischen bezahlten Wiederholungen.
 
-Nur-lokal für einen einzelnen Lauf ändert die gespeicherte Hybrid-Einstellung nicht. Cloudfreigabe nennt Empfänger und übertragene Angaben. Textauszüge und verkleinerte Bilder lassen sich ausschließen; Dateinamen, lokale Beschreibungen, Zielordner und das Vorhaben bleiben bei Cloudanalyse notwendige Eingaben.
+Nur-lokal für einen einzelnen Lauf ändert die gespeicherte Hybrid-Einstellung nicht. Cloudfreigabe nennt Empfänger und übertragene Angaben. Textauszüge und verkleinerte Bilder lassen sich ausschließen; Dateinamen, lokale Beschreibungen, Zielordner mit begrenzten Beispieldateinamen und das Vorhaben bleiben bei Cloudanalyse notwendige Eingaben.
 
 ## Dateisicherheit
 
@@ -66,7 +68,7 @@ Swift 6.2+ und macOS-26-SDK erforderlich. Keine externen Swift-Abhängigkeiten; 
 
 ## Prüfnachweise
 
-67 automatisierte Tests für Stapelnavigation, Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
+88 automatisierte Tests für Stapelnavigation, Scanner, Dateioperationen, Journal, Wiederherstellung, Kollisionen, Budget, Modellantworten und Datenschutz. Native UI-Prüfung mit erfundenen Beispieldateien: Sortieren und Rückgängig, lokale Ollama-Erreichbarkeit und lokale Text- und Bildanalyse in einem ausgewählten Ordner außerhalb des App-Containers sowie Papierkorb und Wiederherstellung. Cloudintegration wird mit simuliertem Transport geprüft; kein bezahlter Lauf mit privaten Nutzerdateien durchgeführt.
 
 ## Gestaltung
 
